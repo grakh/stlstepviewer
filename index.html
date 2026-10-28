@@ -1,0 +1,2942 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<title>STEP / STL Viewer</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: #1e1e1e;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    color: #eee;
+  }
+  #canvas-container { position: absolute; inset: 0; cursor: grab; }
+  #canvas-container:active { cursor: grabbing; }
+  #canvas-container.measure-mode,
+  #canvas-container.measure-mode:active { cursor: crosshair; }
+
+  #ui {
+    position: absolute; top: 12px; left: 12px;
+    display: flex; gap: 4px; align-items: center; flex-wrap: wrap;
+    background: rgba(30,30,30,0.85); padding: 6px 8px;
+    border-radius: 8px; border: 1px solid #444; z-index: 10;
+    backdrop-filter: blur(6px); max-width: calc(100% - 172px); /* справа место под кубик видов */
+  }
+  #ui button, #ui label.file-label {
+    background: #333; color: #eee; border: 1px solid #555;
+    padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    white-space: nowrap;
+  }
+  #ui button:hover, #ui label.file-label:hover { background: #444; }
+  #ui button.active { background: #4a7ac4; border-color: #6a9aef; }
+  #ui button:disabled { opacity: 0.4; cursor: default; }
+  #ui button:disabled:hover { background: #333; }
+  #ui #pp-clear.active { background: #a44; border-color: #c66; }
+  #file-input { display: none; }
+
+  .group {
+    display: flex; align-items: center; gap: 4px;
+    padding-left: 4px; border-left: 1px solid #555;
+    color: #ccc; font-size: 13px;
+  }
+  .group .label { color: #aaa; font-size: 12px; }
+
+  #color-picker {
+    width: 30px; height: 26px; border: 1px solid #555;
+    border-radius: 6px; background: #333; cursor: pointer; padding: 2px;
+  }
+  #opacity-slider {
+    width: 70px;
+    cursor: pointer;
+    accent-color: #6a9aef;
+  }
+  #opacity-value { font-size: 11px; color: #aaa; min-width: 30px; text-align: right; }
+
+  /* Мобильные экраны: узкий тулбар, только иконки, без текстовых лейблов */
+  @media (max-width: 720px) {
+    #ui { gap: 3px; padding: 5px 6px; }
+    #ui button, #ui label.file-label { padding: 5px 7px; font-size: 12px; }
+    /* На мобильных прячем текстовые надписи внутри кнопок, где есть иконка.
+       Класс btn-text применяется к текстовой части — иконку оставляем как есть. */
+    .btn-text { display: none; }
+    .group .label { display: none; }
+    .group { padding-left: 3px; }
+    #opacity-slider { width: 55px; }
+    #opacity-value { display: none; }
+  }
+
+  /* --- View Cube --- */
+  #view-cube-wrap {
+    position: absolute; top: 12px; right: 12px;
+    width: 130px; z-index: 11; user-select: none;
+  }
+  #view-cube {
+    position: relative;
+    width: 130px;
+    height: 130px;
+    perspective: 600px;
+  }
+  .cube {
+    position: absolute; top: 50%; left: 50%;
+    width: 60px; height: 60px; transform-style: preserve-3d;
+    transform: translate(-50%, -50%) rotateX(-25deg) rotateY(-35deg);
+  }
+  .cube-face {
+    position: absolute; width: 60px; height: 60px;
+    background: rgba(80, 90, 110, 0.85);
+    border: 1px solid rgba(180, 200, 230, 0.4);
+    color: #f0f0f0; font-size: 12px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: background 0.15s;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .cube-face:hover { background: rgba(106, 154, 239, 0.95); color: #fff; }
+  .cube-face.front  { transform: translateZ(30px); }
+  .cube-face.back   { transform: rotateY(180deg) translateZ(30px); }
+  .cube-face.right  { transform: rotateY(90deg)  translateZ(30px); }
+  .cube-face.left   { transform: rotateY(-90deg) translateZ(30px); }
+  .cube-face.top    { transform: rotateX(90deg)  translateZ(30px); }
+  .cube-face.bottom { transform: rotateX(-90deg) translateZ(30px); }
+
+  /* Стрелки поворота — крестообразный набор вокруг кубика */
+  .cube-arrow {
+    position: absolute;
+    width: 26px; height: 26px;
+    background: rgba(30,30,30,0.85);
+    color: #ccc;
+    border: 1px solid #555;
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; line-height: 1;
+    user-select: none;
+  }
+  .cube-arrow:hover { background: #4a7ac4; color: #fff; border-color: #6a9aef; }
+  .cube-arrow.up    { top:  2px; left: 50%; transform: translateX(-50%); }
+  .cube-arrow.down  { bottom: 2px; left: 50%; transform: translateX(-50%); }
+  .cube-arrow.left  { left:  2px; top: 50%; transform: translateY(-50%); }
+  .cube-arrow.right { right: 2px; top: 50%; transform: translateY(-50%); }
+  /* Кнопки CW/CCW — для вращения вокруг оси взгляда (по часовой/против часовой) */
+  .cube-arrow.cw  { top: 8px; right: 8px; }
+  .cube-arrow.ccw { top: 8px; left: 8px; }
+
+  .iso-btn {
+    margin-top: 6px;
+    width: 100%;
+    background: rgba(30,30,30,0.85); color: #ccc;
+    border: 1px solid #555; padding: 4px 10px;
+    border-radius: 5px; cursor: pointer;
+    font-size: 11px; font-weight: 600;
+  }
+  .iso-btn:hover { background: #4a7ac4; color: #fff; border-color: #6a9aef; }
+
+  #view-cube-help {
+    position: absolute; top: 175px; right: 12px;
+    background: rgba(30,30,30,0.85); padding: 8px 12px;
+    border-radius: 8px; font-size: 12px; color: #bbb;
+    border: 1px solid #444; z-index: 10; line-height: 1.6;
+    max-width: 200px;
+  }
+  #view-cube-help b { color: #eee; }
+
+  #status {
+    position: absolute; bottom: 12px; left: 12px;
+    background: rgba(30,30,30,0.85); padding: 6px 10px;
+    border-radius: 6px; font-size: 12px; color: #bbb;
+    border: 1px solid #444; max-width: 60%; z-index: 10;
+  }
+
+  /* Панель с деталями измерения */
+  #measure-panel {
+    position: absolute; bottom: 12px; right: 12px;
+    background: rgba(30,30,30,0.92); padding: 10px 14px;
+    border-radius: 8px; font-size: 13px; color: #ddd;
+    border: 1px solid #4a7ac4; z-index: 10;
+    min-width: 220px; display: none;
+  }
+  #measure-panel .title {
+    font-weight: 600; color: #6a9aef; margin-bottom: 6px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  #measure-panel .title #m-delete {
+    background: transparent;
+    border: 1px solid #555;
+    color: #bbb;
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    padding: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #measure-panel .title #m-delete:hover {
+    background: #a44; border-color: #c66; color: #fff;
+  }
+  #measure-panel .title .meta { font-size: 11px; color: #888; font-weight: 400; }
+  #measure-panel .row { display: flex; justify-content: space-between; gap: 12px; margin: 3px 0; }
+  #measure-panel .row.dominant .value { color: #ffd866; font-weight: 600; }
+  #measure-panel .label { color: #999; }
+  #measure-panel .value { color: #fff; font-variant-numeric: tabular-nums; }
+  #measure-panel .hint {
+    font-size: 11px; color: #777; margin-top: 8px;
+    border-top: 1px solid #333; padding-top: 6px;
+  }
+
+  /* Плашки над линиями измерения (по одной на каждое измерение) */
+  .measure-label {
+    position: absolute; pointer-events: auto; cursor: pointer;
+    background: rgba(20,20,20,0.92); color: #ffd866;
+    border: 1px solid #ffd866; padding: 4px 10px;
+    border-radius: 6px; font-size: 13px; font-weight: 600;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+    transform: translate(-50%, -130%); z-index: 9;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    transition: background 0.15s, transform 0.1s;
+  }
+  .measure-label:hover { background: rgba(60,40,10,0.95); }
+  .measure-label.active {
+    background: rgba(106, 154, 239, 0.95);
+    border-color: #6a9aef; color: #fff;
+  }
+  .measure-label .axis { color: #aaa; font-weight: 500; margin-right: 4px; font-size: 11px; }
+  .measure-label.active .axis { color: #d8e4ff; }
+  .measure-label .idx {
+    display: inline-block; font-size: 10px;
+    background: rgba(255,255,255,0.15); color: inherit;
+    padding: 1px 5px; border-radius: 8px;
+    margin-right: 6px; font-weight: 500;
+  }
+
+  #parts-panel {
+    position: absolute; left: 12px; top: 64px; z-index: 10;
+    width: 250px; max-height: calc(100% - 130px); overflow: auto;
+    background: rgba(30,30,30,0.92); border: 1px solid #444; border-radius: 8px;
+    padding: 8px 10px; font-size: 12px; color: #ddd; display: none;
+  }
+  #parts-panel .pp-head { display:flex; justify-content:space-between; align-items:center; font-weight:600; color:#6a9aef; margin-bottom:6px; }
+  #parts-panel button {
+    background:#333; color:#eee; border:1px solid #555; border-radius:5px;
+    padding:3px 7px; cursor:pointer; font-size:12px;
+  }
+  #parts-panel button:hover { background:#444; }
+  #parts-panel button.active { background:#4a7ac4; border-color:#6a9aef; }
+  #parts-panel .pp-tools { display:flex; gap:4px; margin-bottom:6px; }
+  #parts-panel .pp-tools button { font-size:14px; min-width:30px; }
+  #parts-panel .pp-step { display:flex; flex-wrap:nowrap; gap:2px; align-items:center; margin-bottom:6px; color:#aaa; }
+  #parts-panel .pp-head-btns { display:flex; gap:4px; }
+  #parts-panel .pp-step input { width:44px; flex:1 1 44px; min-width:36px; background:#222; color:#eee; border:1px solid #555; border-radius:4px; padding:2px 4px; }
+  #parts-panel .pp-step button { padding:2px 3px; font-size:11px; min-width:0; }
+  #parts-panel .pp-pos { color:#999; font-variant-numeric: tabular-nums; margin-bottom:6px; min-height:14px; }
+  #parts-panel .pp-row {
+    display:flex; align-items:center; gap:5px; padding:4px 5px; border-radius:5px;
+    cursor:pointer; border:1px solid transparent;
+  }
+  #parts-panel .pp-row:hover { background:#383838; }
+  #parts-panel .pp-row.sel { background:rgba(74,122,196,0.35); border-color:#6a9aef; }
+  #parts-panel .pp-row .nm { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #parts-panel .pp-row .sw { width:20px; height:18px; padding:0; border:1px solid #555; border-radius:3px; background:none; cursor:pointer; flex:none; }
+  #parts-panel .pp-row .sw::-webkit-color-swatch-wrapper { padding:1px; }
+  #parts-panel .pp-row .sw::-webkit-color-swatch { border:none; border-radius:2px; }
+  #parts-panel .pp-row button { padding:1px 5px; font-size:11px; }
+  #parts-panel .pp-row.hid .nm { color:#666; text-decoration: line-through; }
+  #parts-panel .pp-hint { color:#777; font-size:11px; margin-top:6px; border-top:1px solid #333; padding-top:5px; }
+  @media (max-width: 720px) { #parts-panel { width: 200px; top: 96px; } }
+  #loader {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    color: #eee; font-size: 14px; display: none; z-index: 20;
+  }
+  #error-banner {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: #5a1a1a; border: 1px solid #c44;
+    color: #fff; padding: 16px 22px; border-radius: 8px;
+    font-size: 13px; max-width: 80%; display: none; z-index: 30;
+  }
+</style>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+
+<div id="ui">
+  <button id="pp-clear" data-i18n-title="parts_clear_title" title="Clear scene">🗑</button>
+  <button id="btn-undo" data-i18n-title="undo_title" title="Undo (Ctrl+Z)" disabled>↶</button>
+  <label for="file-input" class="file-label">📂 <span class="btn-text" data-i18n="open">Open</span></label>
+  <input type="file" id="file-input" multiple accept=".step,.stp,.stl,.obj,.fbx,.glb,.gltf,.3mf,.ply,.pcd,.xyz,.bin,.png,.jpg,.jpeg,.STEP,.STP,.STL,.OBJ,.FBX,.GLB,.GLTF,.3MF,.PLY,.PCD,.XYZ" />
+  <label for="file-input-add" class="file-label" data-i18n-title="add_part_title" title="Add a part to the scene">➕<span class="btn-text" data-i18n="add_part"> Add</span></label>
+  <input type="file" id="file-input-add" multiple accept=".step,.stp,.stl,.obj,.fbx,.glb,.gltf,.3mf,.ply,.pcd,.xyz,.bin,.png,.jpg,.jpeg" style="display:none" />
+  <button id="btn-parts" data-i18n-title="parts_title" title="Parts / assembly">🧩<span class="btn-text" data-i18n="parts"> Parts</span></button>
+  <button id="btn-export-stl" data-i18n-title="export_stl_title" title="Save as STL">💾<span class="btn-text" data-i18n="export_stl"> STL</span></button>
+  <button id="btn-fit" data-i18n-title="fit_title" title="Fit view">⤢<span class="btn-text" data-i18n="fit"> Fit</span></button>
+  <button id="btn-reset" data-i18n-title="reset_title" title="Reset camera">⟲<span class="btn-text" data-i18n="reset"> Reset</span></button>
+  <button id="btn-projection" data-i18n-title="projection_title" title="Toggle perspective / orthographic (drawing)">📐<span class="btn-text" data-i18n="drawing"> Drawing</span></button>
+  <button id="btn-wire" data-i18n-title="wire_title" title="Wireframe">▦<span class="btn-text" data-i18n="wire"> Wire</span></button>
+  <div class="group">
+    <span class="label" data-i18n="color_label">Color:</span>
+    <input type="color" id="color-picker" value="#b0b0b8" />
+    <button id="btn-color-reset" data-i18n-title="color_reset_title" title="Reset color and opacity">↺</button>
+    <span class="label" data-i18n="opacity_label">Opacity:</span>
+    <input type="range" id="opacity-slider" min="0" max="100" value="100" title="Opacity" />
+    <span id="opacity-value">100%</span>
+  </div>
+  <button id="btn-measure" data-i18n-title="dist_btn_title" title="Distance by 2 points">📏<span class="btn-text" data-i18n="dist_btn_text"> Dist.</span></button>
+  <button id="btn-measure-radius" data-i18n-title="radius_btn_title" title="Radius by 3 points">⌒<span class="btn-text" data-i18n="radius_btn_text"> Radius</span></button>
+  <button id="btn-toggle-visibility" data-i18n-title="toggle_visibility_title" title="Hide/show measurements">👁</button>
+  <button id="btn-clear-measure" data-i18n-title="clear_all_title" title="Clear all measurements">⌫<span class="btn-text" data-i18n="clear_all"> Clear all</span></button>
+  <button id="btn-lang" title="Switch language">RU</button>
+</div>
+
+<div id="view-cube-wrap">
+  <div id="view-cube">
+    <div class="cube" id="cube-element">
+      <div class="cube-face front"  data-view="front">FRONT</div>
+      <div class="cube-face back"   data-view="back">BACK</div>
+      <div class="cube-face right"  data-view="right">RIGHT</div>
+      <div class="cube-face left"   data-view="left">LEFT</div>
+      <div class="cube-face top"    data-view="top">TOP</div>
+      <div class="cube-face bottom" data-view="bottom">BOTTOM</div>
+    </div>
+    <!-- Стрелки: каждая поворачивает сцену на 45° вокруг соответствующей оси -->
+    <div class="cube-arrow up"    data-rotate="up"    title="Наклонить вверх">▲</div>
+    <div class="cube-arrow down"  data-rotate="down"  title="Наклонить вниз">▼</div>
+    <div class="cube-arrow left"  data-rotate="left"  title="Повернуть влево">◀</div>
+    <div class="cube-arrow right" data-rotate="right" title="Повернуть вправо">▶</div>
+    <div class="cube-arrow ccw"   data-rotate="ccw"   title="Против часовой">↺</div>
+    <div class="cube-arrow cw"    data-rotate="cw"    title="По часовой">↻</div>
+  </div>
+  <button class="iso-btn" data-view="iso">ISO</button>
+</div>
+
+<div id="view-cube-help">
+  <div><b data-i18n="lmb">LMB</b> <span data-i18n="lmb_desc">— rotate</span></div>
+  <div><b data-i18n="rmb">RMB</b> <span data-i18n="rmb_desc">— pan</span></div>
+  <div><b data-i18n="wheel">Wheel</b> <span data-i18n="wheel_desc">— zoom</span></div>
+  <div id="measure-hint" style="display:none; color:#6a9aef; margin-top:4px;">
+    <b data-i18n="measure_label">Measure:</b> <span data-i18n="snap_hint">snap to edges/vertices</span>
+  </div>
+</div>
+
+<div id="status">Loading libraries...</div>
+
+<div id="measure-panel">
+  <div class="title">
+    <span><span data-i18n="measure_title">📏 Measurement</span> <span id="m-num"></span></span>
+    <button id="m-delete" data-i18n-title="delete_one" title="Delete this measurement">✕</button>
+  </div>
+  <div class="row" id="row-dist"><span class="label" data-i18n="distance">Distance:</span><span class="value" id="m-dist">—</span></div>
+  <div class="row" id="row-dx"><span class="label">ΔX:</span><span class="value" id="m-dx">—</span></div>
+  <div class="row" id="row-dy"><span class="label">ΔY:</span><span class="value" id="m-dy">—</span></div>
+  <div class="row" id="row-dz"><span class="label">ΔZ:</span><span class="value" id="m-dz">—</span></div>
+  <div class="hint" id="m-hint">
+    <span id="m-meta"></span>
+    <span style="display:block; margin-top: 4px;" data-i18n="click_label_hint">Click a measurement label to see details.</span>
+  </div>
+</div>
+
+<div id="parts-panel">
+  <div class="pp-head"><span data-i18n="parts_header">🧩 Parts</span><button id="pp-close" title="✕">✕</button></div>
+  <div class="pp-tools">
+    <button id="pp-move" class="active" data-i18n-title="tool_move_title" title="Move (drag arrows)">✥</button>
+    <button id="pp-rotate" data-i18n-title="tool_rotate_title" title="Rotate (15° steps)">⟳</button>
+    <button id="pp-align" data-i18n-title="tool_align_title" title="Align point to point">⌖</button>
+    <button id="pp-mate" data-i18n-title="tool_mate_title" title="Mate face to face">⧉</button>
+    <button id="pp-flip" data-i18n-title="tool_flip_title" title="Turn 90° around the last mated face">↻90</button>
+    <button id="pp-floor" data-i18n-title="tool_floor_title" title="Drop to floor (Z=0)">⤓</button>
+    <button id="pp-resetpos" data-i18n-title="tool_resetpos_title" title="Reset part position">⟲</button>
+  </div>
+  <div class="pp-step" id="pp-step-row">
+    <span data-i18n="step_label">Step:</span>
+    <input type="number" id="pp-step" value="1" min="0" step="0.1" />
+    <button data-nudge="x-">−X</button><button data-nudge="x+">+X</button>
+    <button data-nudge="y-">−Y</button><button data-nudge="y+">+Y</button>
+    <button data-nudge="z-">−Z</button><button data-nudge="z+">+Z</button>
+  </div>
+  <div id="pp-pos" class="pp-pos"></div>
+  <div id="pp-list"></div>
+  <div class="pp-hint" data-i18n="parts_hint">Click a part to select it. Shift+drop adds a file.</div>
+</div>
+
+<div id="loader" data-i18n="loading">Loading...</div>
+<div id="error-banner"></div>
+
+<!-- UMD-сборки. Версия 0.132 — последняя, где examples/js/ работает как UMD. -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/TransformControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/STLLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/OBJLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/PLYLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/PCDLoader.js"></script>
+<!-- fflate — разжатие: нужен и FBXLoader'у, и 3MFLoader'у -->
+<script src="https://cdn.jsdelivr.net/npm/fflate@0.7.4/umd/index.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/FBXLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/3MFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/exporters/STLExporter.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.22/dist/occt-import-js.js"></script>
+
+<script>
+'use strict';
+
+const statusEl = document.getElementById('status');
+const loaderEl = document.getElementById('loader');
+const errorBanner = document.getElementById('error-banner');
+
+function showError(msg) {
+  console.error(msg);
+  errorBanner.textContent = msg;
+  errorBanner.style.display = 'block';
+}
+
+// === Система локализации ====================================================
+// По умолчанию — английский. Можно переключить кнопкой в тулбаре.
+const I18N = {
+  en: {
+    open: 'Open',
+    add_part: 'Add',
+    undo_title: 'Undo last action (Ctrl+Z)',
+    undo_done: 'Undone',
+    undo_empty: 'Nothing to undo',
+    wire: 'Wire',
+    wire_title: 'Wireframe view (selected part, or whole scene)',
+    part_color: 'Part color',
+    parts_clear_title: 'Clear scene (remove all parts)',
+    parts_clear_confirm: 'Press 🗑 again to clear the scene',
+    parts_cleared: 'Scene cleared',
+    tool_mate_title: 'Mate faces: face of the part → face of another part',
+    tool_flip_title: 'Turn 90° around the last mated face',
+    mate_step1: 'Mate 1/2: click a face on the selected part',
+    mate_step2: 'Mate 2/2: click the face of another part to press it against',
+    mate_done: 'Faces mated. ↻90 turns the part around the contact face.',
+    flip_none: 'Mate two faces first',
+    add_part_title: 'Add a part to the scene (keeps current ones)',
+    parts: 'Parts',
+    parts_title: 'Parts / assembly panel',
+    parts_header: '🧩 Parts',
+    tool_move_title: 'Move (drag the arrows)',
+    tool_rotate_title: 'Rotate (15° steps)',
+    tool_align_title: 'Align: point on the part → target point',
+    tool_floor_title: 'Drop to floor (Z = 0)',
+    tool_resetpos_title: 'Reset part position',
+    step_label: 'Step:',
+    parts_hint: 'Click a part to select it. Esc — deselect, Del — remove. Shift+drop adds a file.',
+    select_part_first: 'Select a part first',
+    align_step1: 'Align 1/2: click a point on the selected part',
+    align_step2: 'Align 2/2: click the target point on another part',
+    align_done: 'Aligned, moved by {d}',
+    align_cancel: 'Align cancelled',
+    part_toggle_vis: 'Show/hide',
+    part_delete: 'Remove part',
+    fit: 'Fit',
+    reset: 'Reset',
+    fit_title: 'Fit to model',
+    reset_title: 'Reset camera',
+    drawing: 'Drawing',
+    perspective: 'Perspective',
+    projection_title: 'Toggle perspective / orthographic (drawing)',
+    color_label: 'Color:',
+    color_reset_title: 'Reset color and opacity',
+    opacity_label: 'Opacity:',
+    dist_btn: '📏 Dist.',
+    radius_btn: '⌒ Radius',
+    dist_btn_text: 'Dist.',
+    radius_btn_text: 'Radius',
+    dist_btn_title: 'Distance by 2 points',
+    radius_btn_title: 'Radius by 3 points',
+    toggle_visibility_title: 'Hide/show measurements',
+    clear_all: 'Clear all',
+    clear_all_title: 'Clear all measurements',
+    delete_one: 'Delete this measurement',
+
+    lmb: 'LMB', lmb_desc: '— rotate',
+    rmb: 'RMB', rmb_desc: '— pan',
+    wheel: 'Wheel', wheel_desc: '— zoom',
+    measure_label: 'Measure:',
+    snap_hint: 'snap to edges/vertices',
+    measure_title: '📏 Measurement',
+    distance: 'Distance:',
+    click_label_hint: 'Click a measurement label to see details.',
+
+    loading: 'Loading...',
+    loading_libs: 'Loading libraries...',
+    ready: 'Ready. Open .step, .stl, .obj, .fbx, .glb/.gltf, .3mf, .ply, .pcd or .xyz. For .gltf, select the .bin and textures together.',
+
+    err_three: 'Failed to load three.js.',
+    err_controls: 'Failed to load OrbitControls.',
+    err_stl: 'Failed to load STLLoader.',
+    err_occt: 'Failed to load STEP parser.',
+    err_prefix: 'Error: ',
+
+    // динамические
+    measure_off: 'Measure mode off',
+    dist_prompt: 'Distance: click 2 points. Snaps to edges and vertices.',
+    radius_prompt: 'Radius: click 3 points on the arc. 2nd point is the reference.',
+    first_point: 'First point ({snap}). Click second.',
+    radius_1_3: '1/3: first point ({snap}). Click the middle.',
+    radius_2_3: '2/3: middle point ({snap}). Click the third.',
+    point_missed: 'Point did not hit the model',
+    measure_added: 'Measurement #{id} added.',
+    radius_added: 'Radius #{id} added.',
+    collinear: 'Points are collinear — circle not defined',
+    measurements_shown: 'Measurements shown',
+    measurements_hidden: 'Measurements hidden ({n})',
+    ortho_on: 'Orthographic projection (drawing mode)',
+    ortho_off: 'Perspective projection',
+    unsupported: 'Unsupported file: {name}',
+    need_step_stl: 'Unsupported file: {name}',
+    file_loading: 'Loading {name}...',
+    loaded_parts: '{name} · {n} part(s)',
+    stl_loaded: '{name} · STL loaded',
+    obj_loaded: '{name} · OBJ loaded',
+    fbx_loaded: '{name} · FBX loaded',
+    gltf_loaded: '{name} · glTF loaded',
+    tmf_loaded: '{name} · 3MF loaded',
+    ply_loaded_mesh: '{name} · PLY mesh ({n} tri)',
+    ply_loaded_points: '{name} · PLY point cloud ({n} pts)',
+    pcd_loaded: '{name} · PCD ({n} pts)',
+    xyz_loaded: '{name} · XYZ ({n} pts)',
+    export_stl: 'STL',
+    export_stl_title: 'Save model as STL',
+    export_no_model: 'Nothing to export — load a model first',
+    export_done: 'Exported {name}',
+    load_first: 'Load a model first',
+
+    // панель измерения
+    dist_label: 'Distance:',
+    radius_label: 'Radius R:',
+    to_mid: 'To middle:',
+    center_y: 'Center Y:',
+    center_xz: 'Center X,Z:',
+    total: 'total: ',
+
+    // snap-типы (в статус-баре)
+    snap_vertex: 'vertex',
+    snap_edge: 'edge',
+    snap_face: 'surface',
+
+    lang_btn: 'RU'
+  },
+  ru: {
+    open: 'Открыть',
+    add_part: 'Добавить',
+    undo_title: 'Отменить последнее действие (Ctrl+Z)',
+    undo_done: 'Отменено',
+    undo_empty: 'Нечего отменять',
+    wire: 'Каркас',
+    wire_title: 'Каркасный вид (выбранная деталь или вся сцена)',
+    part_color: 'Цвет детали',
+    parts_clear_title: 'Очистить сцену (удалить все детали)',
+    parts_clear_confirm: 'Нажмите 🗑 ещё раз, чтобы очистить сцену',
+    parts_cleared: 'Сцена очищена',
+    tool_mate_title: 'Стыковка плоскостей: грань детали → грань другой детали',
+    tool_flip_title: 'Повернуть на 90° вокруг последней стыковки',
+    mate_step1: 'Стыковка 1/2: кликните грань на выбранной детали',
+    mate_step2: 'Стыковка 2/2: кликните грань другой детали, к которой прижать',
+    mate_done: 'Грани состыкованы. ↻90 поворачивает деталь вокруг грани контакта.',
+    flip_none: 'Сначала состыкуйте две грани',
+    add_part_title: 'Добавить деталь в сцену (текущие останутся)',
+    parts: 'Детали',
+    parts_title: 'Панель деталей / сборка',
+    parts_header: '🧩 Детали',
+    tool_move_title: 'Перемещение (тяните стрелки)',
+    tool_rotate_title: 'Вращение (шаг 15°)',
+    tool_align_title: 'Совместить: точка на детали → целевая точка',
+    tool_floor_title: 'Опустить на пол (Z = 0)',
+    tool_resetpos_title: 'Вернуть деталь на исходное место',
+    step_label: 'Шаг:',
+    parts_hint: 'Кликните деталь, чтобы выбрать. Esc — снять выбор, Del — удалить. Shift+перетаскивание добавляет файл.',
+    select_part_first: 'Сначала выберите деталь',
+    align_step1: 'Совмещение 1/2: кликните точку на выбранной детали',
+    align_step2: 'Совмещение 2/2: кликните целевую точку на другой детали',
+    align_done: 'Совмещено, сдвиг {d}',
+    align_cancel: 'Совмещение отменено',
+    part_toggle_vis: 'Показать/скрыть',
+    part_delete: 'Удалить деталь',
+    fit: 'Вписать',
+    reset: 'Сброс',
+    fit_title: 'Вписать модель',
+    reset_title: 'Сброс камеры',
+    drawing: 'Чертёж',
+    perspective: 'Перспектива',
+    projection_title: 'Переключить перспектива / ортогональная (чертёж)',
+    color_label: 'Цвет:',
+    color_reset_title: 'Сбросить цвет и прозрачность',
+    opacity_label: 'Прозр.:',
+    dist_btn: '📏 Дист.',
+    radius_btn: '⌒ Радиус',
+    dist_btn_text: 'Дист.',
+    radius_btn_text: 'Радиус',
+    dist_btn_title: 'Дистанция по 2 точкам',
+    radius_btn_title: 'Радиус по 3 точкам',
+    toggle_visibility_title: 'Скрыть/показать измерения',
+    clear_all: 'Очистить',
+    clear_all_title: 'Очистить все измерения',
+    delete_one: 'Удалить это измерение',
+
+    lmb: 'ЛКМ', lmb_desc: '— вращение',
+    rmb: 'ПКМ', rmb_desc: '— перемещение',
+    wheel: 'Колесо', wheel_desc: '— зум',
+    measure_label: 'Измерение:',
+    snap_hint: 'snap к рёбрам/вершинам',
+    measure_title: '📏 Измерение',
+    distance: 'Расстояние:',
+    click_label_hint: 'Кликните на плашку измерения, чтобы посмотреть детали.',
+
+    loading: 'Загрузка...',
+    loading_libs: 'Загрузка библиотек...',
+    ready: 'Готов. Откройте .step, .stl, .obj, .fbx, .glb/.gltf, .3mf, .ply, .pcd или .xyz. Для .gltf выбирайте вместе .bin и текстуры.',
+
+    err_three: 'Не удалось загрузить three.js.',
+    err_controls: 'Не удалось загрузить OrbitControls.',
+    err_stl: 'Не удалось загрузить STLLoader.',
+    err_occt: 'Не удалось загрузить парсер STEP.',
+    err_prefix: 'Ошибка: ',
+
+    measure_off: 'Режим измерения выключен',
+    dist_prompt: 'Дистанция: кликните 2 точки. Snap к рёбрам и вершинам.',
+    radius_prompt: 'Радиус: кликните 3 точки на окружности. 2-я точка — отсчётная.',
+    first_point: 'Первая точка ({snap}). Кликните вторую.',
+    radius_1_3: '1/3: первая точка ({snap}). Кликните среднюю.',
+    radius_2_3: '2/3: средняя точка ({snap}). Кликните третью.',
+    point_missed: 'Точка не попала на модель',
+    measure_added: 'Измерение #{id} добавлено.',
+    radius_added: 'Радиус #{id} добавлен.',
+    collinear: 'Точки коллинеарны — окружность не определена',
+    measurements_shown: 'Измерения показаны',
+    measurements_hidden: 'Измерения скрыты ({n} шт.)',
+    ortho_on: 'Ортогональная проекция (режим чертежа)',
+    ortho_off: 'Перспективная проекция',
+    unsupported: 'Неподдерживаемый формат: {name}',
+    need_step_stl: 'Неподдерживаемый формат: {name}',
+    file_loading: 'Загрузка {name}...',
+    loaded_parts: '{name} · {n} компонент(ов)',
+    stl_loaded: '{name} · STL загружен',
+    obj_loaded: '{name} · OBJ загружен',
+    fbx_loaded: '{name} · FBX загружен',
+    gltf_loaded: '{name} · glTF загружен',
+    tmf_loaded: '{name} · 3MF загружен',
+    ply_loaded_mesh: '{name} · PLY меш ({n} тр.)',
+    ply_loaded_points: '{name} · PLY облако точек ({n} точек)',
+    pcd_loaded: '{name} · PCD ({n} точек)',
+    xyz_loaded: '{name} · XYZ ({n} точек)',
+    export_stl: 'STL',
+    export_stl_title: 'Сохранить модель как STL',
+    export_no_model: 'Нет модели — сначала загрузите файл',
+    export_done: 'Экспортировано: {name}',
+    load_first: 'Сначала загрузите модель',
+
+    dist_label: 'Расстояние:',
+    radius_label: 'Радиус R:',
+    to_mid: 'До средней:',
+    center_y: 'Центр Y:',
+    center_xz: 'Центр X,Z:',
+    total: 'всего: ',
+
+    snap_vertex: 'вершина',
+    snap_edge: 'ребро',
+    snap_face: 'поверхность',
+
+    lang_btn: 'EN'
+  }
+};
+
+let currentLang = 'en';
+function t(key, params) {
+  let str = (I18N[currentLang] && I18N[currentLang][key]) || (I18N.en[key]) || key;
+  if (params) {
+    for (const k in params) str = str.split('{' + k + '}').join(params[k]);
+  }
+  return str;
+}
+// Применяет переводы ко всем элементам с data-i18n / data-i18n-title.
+// Также даёт коллбэкам перерендерить динамическое (статус, плашки и т.п.).
+const i18nCallbacks = [];
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    el.textContent = t(key);
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    const key = el.getAttribute('data-i18n-title');
+    el.setAttribute('title', t(key));
+  });
+  for (const cb of i18nCallbacks) cb();
+}
+function setLang(lang) {
+  if (!I18N[lang]) return;
+  currentLang = lang;
+  const btn = document.getElementById('btn-lang');
+  if (btn) btn.textContent = I18N[lang].lang_btn;
+  applyI18n();
+}
+
+window.addEventListener('error', e => showError(t('err_prefix') + (e.message || e.error)));
+
+if (typeof THREE === 'undefined') {
+  showError(t('err_three'));
+} else if (typeof THREE.OrbitControls === 'undefined') {
+  showError(t('err_controls'));
+} else if (typeof THREE.STLLoader === 'undefined') {
+  showError(t('err_stl'));
+} else if (typeof occtimportjs === 'undefined') {
+  showError(t('err_occt'));
+} else {
+  // Кнопка переключения языка работает даже до initApp
+  document.getElementById('btn-lang').addEventListener('click', () => {
+    setLang(currentLang === 'en' ? 'ru' : 'en');
+  });
+  applyI18n();
+  statusEl.textContent = t('ready');
+  initApp();
+}
+
+function initApp() {
+  const container = document.getElementById('canvas-container');
+  const measurePanel = document.getElementById('measure-panel');
+  const measureHint = document.getElementById('measure-hint');
+  const cubeElement = document.getElementById('cube-element');
+
+  // Состояние измерений объявляем заранее. animate() стартует немедленно
+  // и обращается к этим переменным через updateAllMeasureLabels(),
+  // а let/const в TDZ дают ReferenceError.
+  // Режим: 'none' | 'distance' (2 точки) | 'radius' (3 точки).
+  let measureMode = 'none';
+  // Накопитель временных точек для текущего набора (1 для distance, 1-2 для radius).
+  let pendingPoints = [];
+  let pendingMarkers = [];
+  const measurements = [];
+  let activeMeasurementId = null;
+  let nextId = 1;
+  let measurementsVisible = true; // toggle "скрыть/показать"
+  let wireframeAll = false;        // каркас для всей сцены (новые детали тоже)
+
+  // === История для отмены (Ctrl+Z) ===
+  // Каждая запись — функция, возвращающая сцену в состояние "до действия".
+  const undoStack = [];
+  const UNDO_LIMIT = 60;
+  function pushUndo(fn) {
+    undoStack.push(fn);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    updateUndoBtn();
+  }
+  function clearUndo() { undoStack.length = 0; updateUndoBtn(); }
+  function updateUndoBtn() {
+    const b = document.getElementById('btn-undo');
+    if (b) b.disabled = undoStack.length === 0;
+  }
+  // Снимок внешнего вида (цвет / прозрачность / каркас) всех материалов под root
+  function snapshotLook(root) {
+    const mats = [];
+    root.traverse(o => {
+      if ((o.isMesh || o.isPoints) && o.material && o.material.color) {
+        const m = o.material;
+        mats.push({ m, color: m.color.getHex(), opacity: m.opacity, transparent: m.transparent,
+                    depthWrite: m.depthWrite, wireframe: !!m.wireframe });
+      }
+    });
+    const slider = document.getElementById('opacity-slider');
+    return { mats, wireAll: wireframeAll, slider: slider ? slider.value : '100' };
+  }
+  function restoreLook(snap) {
+    for (const r of snap.mats) {
+      r.m.color.setHex(r.color);
+      r.m.opacity = r.opacity; r.m.transparent = r.transparent;
+      r.m.depthWrite = r.depthWrite; r.m.wireframe = r.wireframe;
+      r.m.needsUpdate = true;
+    }
+    wireframeAll = snap.wireAll;
+    const slider = document.getElementById('opacity-slider');
+    const lbl = document.getElementById('opacity-value');
+    if (slider) slider.value = snap.slider;
+    if (lbl) lbl.textContent = snap.slider + '%';
+  }
+  function snapshotTransform(part) {
+    return { part, pos: part.position.clone(), quat: part.quaternion.clone() };
+  }
+  function pushTransformUndo(before) {
+    const p = before.part;
+    if (p.position.equals(before.pos) && p.quaternion.equals(before.quat)) return;
+    pushUndo(() => { p.position.copy(before.pos); p.quaternion.copy(before.quat); p.updateMatrixWorld(true); });
+  }
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x2a2a2a);
+
+  let camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100000);
+  // CAD-конвенция: Z направлена вверх, XY — плоскость пола.
+  camera.up.set(0, 0, 1);
+  camera.position.set(50, -50, 50);
+  let isOrthographic = false;
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  container.appendChild(renderer.domElement);
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.0));
+  const dir1 = new THREE.DirectionalLight(0xffffff, 0.8); dir1.position.set(1,1,1); scene.add(dir1);
+  const dir2 = new THREE.DirectionalLight(0xffffff, 0.4); dir2.position.set(-1,-0.5,-1); scene.add(dir2);
+
+  // GridHelper по умолчанию лежит в плоскости XZ (Y-up мир). Для CAD Z-up
+  // мы поворачиваем сетку так, чтобы она легла в XY-плоскости.
+  let grid = new THREE.GridHelper(200, 20, 0x555555, 0x3a3a3a);
+  grid.rotation.x = Math.PI / 2;
+  scene.add(grid);
+  // Собственный AxesHelper: рисует оси в обе стороны от центра (стандартный THREE.AxesHelper
+  // рисует только положительное направление). Плюс делает отрицательные лучи темнее,
+  // чтобы визуально различать положительное и отрицательное направление.
+  function makeBiAxes(len) {
+    const g = new THREE.Group();
+    // Пары: направление и цвет (положительный, отрицательный)
+    const axes = [
+      { dir: [1, 0, 0], pos: 0xff3030, neg: 0x802020 }, // X
+      { dir: [0, 1, 0], pos: 0x30ff30, neg: 0x208020 }, // Y
+      { dir: [0, 0, 1], pos: 0x3080ff, neg: 0x204080 }  // Z
+    ];
+    for (const a of axes) {
+      const d = new THREE.Vector3().fromArray(a.dir);
+      // Положительный луч 0 → +len
+      const posGeom = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0,0,0), d.clone().multiplyScalar(len)
+      ]);
+      g.add(new THREE.Line(posGeom, new THREE.LineBasicMaterial({ color: a.pos })));
+      // Отрицательный луч 0 → -len
+      const negGeom = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0,0,0), d.clone().multiplyScalar(-len)
+      ]);
+      g.add(new THREE.Line(negGeom, new THREE.LineBasicMaterial({ color: a.neg })));
+    }
+    return g;
+  }
+  scene.add(makeBiAxes(20));
+
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.screenSpacePanning = true;
+  controls.mouseButtons = {
+    LEFT: THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.DOLLY,
+    RIGHT: THREE.MOUSE.PAN
+  };
+  renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+
+  // === Переключение проекции: перспектива ↔ ортогональная (чертёж) ===
+  // OrthographicCamera задаётся frustum'ом (left,right,top,bottom). Чтобы модель
+  // выглядела примерно того же размера, что и в перспективе, считаем "вертикальную высоту"
+  // на текущем расстоянии до target по формуле perspective: h = 2 * dist * tan(fov/2).
+  // Эту h используем как высоту ортогонального frustum'а.
+  function setProjection(orthographic) {
+    if (orthographic === isOrthographic) return;
+    const aspect = container.clientWidth / container.clientHeight;
+    const oldPos = camera.position.clone();
+    const oldUp = camera.up.clone();
+    const oldTarget = controls.target.clone();
+    const oldNear = camera.near;
+    const oldFar = camera.far;
+    const dist = oldPos.distanceTo(oldTarget);
+
+    let newCam;
+    if (orthographic) {
+      // Высота frustum'а — из перспективного fov, чтобы кадрировка осталась похожей
+      const fov = camera.fov || 45;
+      const h = 2 * dist * Math.tan((fov * Math.PI / 180) / 2);
+      const w = h * aspect;
+      // Узкий диапазон near/far — критично для z-buffer precision.
+      // Слишком большой far - near = z-fighting (тёмные осколки, пробитые грани).
+      // Берём ~5×dist вокруг камеры с запасом.
+      newCam = new THREE.OrthographicCamera(-w/2, w/2, h/2, -h/2, -dist * 2, dist * 5);
+    } else {
+      newCam = new THREE.PerspectiveCamera(45, aspect, Math.max(dist / 1000, 0.01), dist * 100);
+    }
+    newCam.position.copy(oldPos);
+    newCam.up.copy(oldUp);
+    newCam.lookAt(oldTarget);
+    newCam.updateProjectionMatrix();
+
+    camera = newCam;
+    controls.object = camera; // OrbitControls умеет работать с любой PerspectiveCamera/OrthographicCamera
+    if (typeof transformCtl !== 'undefined' && transformCtl) transformCtl.camera = camera;
+    controls.update();
+    isOrthographic = orthographic;
+  }
+
+  const btnProjection = document.getElementById('btn-projection');
+  function updateProjectionBtnLabel() {
+    // Иконка меняется на 🎥 в режиме перспективы (т.е. когда ортогональная активна),
+    // и на 📐 иначе. Текст в span — соответствующее слово из словаря.
+    const isOrtho = isOrthographic;
+    const textSpan = btnProjection.querySelector('.btn-text');
+    const label = ' ' + t(isOrtho ? 'perspective' : 'drawing');
+    // Меняем только первый текстовый узел (иконку) — span остаётся отдельно
+    btnProjection.firstChild.nodeValue = isOrtho ? '🎥' : '📐';
+    if (textSpan) textSpan.textContent = label;
+  }
+  btnProjection.addEventListener('click', () => {
+    setProjection(!isOrthographic);
+    btnProjection.classList.toggle('active', isOrthographic);
+    updateProjectionBtnLabel();
+    statusEl.textContent = isOrthographic ? t('ortho_on') : t('ortho_off');
+  });
+  i18nCallbacks.push(() => {
+    updateProjectionBtnLabel();
+    if (typeof updateActivePanel === 'function') updateActivePanel();
+  });
+
+  let modelGroup = new THREE.Group();
+  scene.add(modelGroup);
+
+  const initialCamPos = camera.position.clone();
+  const initialTarget = controls.target.clone();
+
+  function resetCamera() {
+    camera.position.copy(initialCamPos);
+    controls.target.copy(initialTarget);
+    camera.up.set(0, 0, 1);
+    controls.update();
+  }
+
+  let measureMarkerRadius = 0.5;
+
+  function getModelInfo() {
+    if (modelGroup.children.length === 0) {
+      return { center: new THREE.Vector3(0,0,0), maxDim: 100 };
+    }
+    const box = new THREE.Box3().setFromObject(modelGroup);
+    if (box.isEmpty()) return { center: new THREE.Vector3(0,0,0), maxDim: 100 };
+    const size = box.getSize(new THREE.Vector3());
+    return {
+      center: box.getCenter(new THREE.Vector3()),
+      maxDim: Math.max(size.x, size.y, size.z)
+    };
+  }
+
+  function fitToModel() {
+    if (modelGroup.children.length === 0) return;
+    const box = new THREE.Box3().setFromObject(modelGroup);
+    if (box.isEmpty()) return;
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+
+    if (camera.isPerspectiveCamera) {
+      const fov = camera.fov * Math.PI / 180;
+      const distance = (maxDim / 2) / Math.tan(fov / 2) * 1.8;
+      // Z-up ISO: смотрим с угла (+X, -Y, +Z) — спереди-справа-сверху.
+      const dir = new THREE.Vector3(1, -1, 1).normalize();
+      camera.position.copy(center).add(dir.multiplyScalar(distance));
+      camera.near = Math.max(distance / 1000, 0.01);
+      camera.far = distance * 100;
+      camera.updateProjectionMatrix();
+    } else {
+      const aspect = container.clientWidth / container.clientHeight;
+      const h = maxDim * 1.8;
+      const w = h * aspect;
+      camera.left = -w/2; camera.right = w/2;
+      camera.top = h/2;  camera.bottom = -h/2;
+      camera.near = -maxDim * 3;
+      camera.far  =  maxDim * 5;
+      const dir = new THREE.Vector3(1, -1, 1).normalize();
+      camera.position.copy(center).add(dir.multiplyScalar(maxDim * 2));
+      camera.lookAt(center);
+      camera.updateProjectionMatrix();
+    }
+    controls.target.copy(center);
+    controls.update();
+
+    const gridSize = Math.max(maxDim * 2, 20);
+    scene.remove(grid);
+    grid = new THREE.GridHelper(gridSize, 20, 0x555555, 0x3a3a3a);
+    // Z-up: сетка лежит в XY-плоскости на нижней грани bbox по Z.
+    grid.rotation.x = Math.PI / 2;
+    grid.position.z = box.min.z;
+    scene.add(grid);
+
+    measureMarkerRadius = maxDim * 0.002;
+  }
+
+  // --- Виды по граням ---
+  let viewAnim = null;
+  function animateCamera(targetPos, targetTarget, targetUp, duration) {
+    duration = duration || 400;
+    const startPos = camera.position.clone();
+    const startTarget = controls.target.clone();
+    const startUp = camera.up.clone();
+    const startTime = performance.now();
+
+    if (viewAnim) viewAnim.cancelled = true;
+    const myAnim = { cancelled: false };
+    viewAnim = myAnim;
+
+    function step(now) {
+      if (myAnim.cancelled) return;
+      let t = (now - startTime) / duration;
+      if (t > 1) t = 1;
+      const e = 1 - Math.pow(1 - t, 3);
+      camera.position.lerpVectors(startPos, targetPos, e);
+      controls.target.lerpVectors(startTarget, targetTarget, e);
+      camera.up.lerpVectors(startUp, targetUp, e).normalize();
+      controls.update();
+      if (t < 1) requestAnimationFrame(step);
+      else {
+        camera.up.copy(targetUp);
+        controls.update();
+        viewAnim = null;
+      }
+    }
+    requestAnimationFrame(step);
+  }
+
+  function setView(viewName) {
+    const info = getModelInfo();
+    const center = info.center, maxDim = info.maxDim;
+    // Дистанцию подбираем так, чтобы кадрировка осталась нормальной в обоих режимах.
+    // Для ортогональной дистанция влияет только на near/far отсечение — frustum фиксирован.
+    let distance;
+    if (camera.isPerspectiveCamera) {
+      const fov = camera.fov * Math.PI / 180;
+      distance = (maxDim / 2) / Math.tan(fov / 2) * 1.8;
+    } else {
+      distance = maxDim * 2;
+    }
+
+    // CAD Z-up. FRONT — камера с +Y смотрит на -Y (в CAD "спереди" условно смотрит на XZ-плоскость).
+    // Для всех "боковых" видов up = +Z. Для TOP/BOTTOM up = +Y (север по стандарту чертежа).
+    const dirs = {
+      front:  { dir: new THREE.Vector3( 0, -1,  0), up: new THREE.Vector3(0, 0, 1) },
+      back:   { dir: new THREE.Vector3( 0,  1,  0), up: new THREE.Vector3(0, 0, 1) },
+      right:  { dir: new THREE.Vector3( 1,  0,  0), up: new THREE.Vector3(0, 0, 1) },
+      left:   { dir: new THREE.Vector3(-1,  0,  0), up: new THREE.Vector3(0, 0, 1) },
+      top:    { dir: new THREE.Vector3( 0,  0,  1), up: new THREE.Vector3(0, 1, 0) },
+      bottom: { dir: new THREE.Vector3( 0,  0, -1), up: new THREE.Vector3(0,-1, 0) },
+      iso:    { dir: new THREE.Vector3( 1, -1,  1).normalize(), up: new THREE.Vector3(0, 0, 1) }
+    };
+    const v = dirs[viewName];
+    if (!v) return;
+    const targetPos = center.clone().add(v.dir.clone().multiplyScalar(distance));
+    animateCamera(targetPos, center.clone(), v.up.clone());
+  }
+
+  // Поворот сцены на фиксированный угол вокруг оси относительно текущего вида.
+  // Берём оси прямо из матрицы камеры — это даёт настоящие "экранные" право/верх/назад,
+  // независимо от того, какой сейчас camera.up (важно для видов TOP/BOTTOM).
+  function rotateView(direction) {
+    const angle = Math.PI / 4; // 45°
+    const target = controls.target.clone();
+    const offset = camera.position.clone().sub(target);
+
+    camera.updateMatrixWorld();
+    const e = camera.matrixWorld.elements;
+    // Колонки матрицы 4x4 в three.js: 0..2 — right, 4..6 — up, 8..10 — back (от target к камере)
+    const screenRight = new THREE.Vector3(e[0], e[1], e[2]).normalize();
+    const screenUp    = new THREE.Vector3(e[4], e[5], e[6]).normalize();
+    const screenBack  = new THREE.Vector3(e[8], e[9], e[10]).normalize();
+
+    let axis, dir;
+    switch (direction) {
+      // Поворот "влево/вправо" — вокруг экранной вертикали
+      case 'left':  axis = screenUp.clone();    dir = -1; break;
+      case 'right': axis = screenUp.clone();    dir =  1; break;
+      // Наклон "вверх/вниз" — вокруг экранной горизонтали
+      case 'up':    axis = screenRight.clone(); dir = -1; break;
+      case 'down':  axis = screenRight.clone(); dir =  1; break;
+      // Крен — вокруг направления взгляда
+      case 'cw':    axis = screenBack.clone();  dir =  1; break;
+      case 'ccw':   axis = screenBack.clone();  dir = -1; break;
+      default: return;
+    }
+    const q = new THREE.Quaternion().setFromAxisAngle(axis, angle * dir);
+    const newOffset = offset.clone().applyQuaternion(q);
+    const newUp = camera.up.clone().applyQuaternion(q).normalize();
+
+    animateCamera(target.clone().add(newOffset), target.clone(), newUp, 300);
+  }
+
+  document.querySelectorAll('[data-view]').forEach(el => {
+    el.addEventListener('click', () => setView(el.dataset.view));
+  });
+  document.querySelectorAll('[data-rotate]').forEach(el => {
+    el.addEventListener('click', () => rotateView(el.dataset.rotate));
+  });
+
+  function updateCube() {
+    // Задача: показать в CSS-кубике ту же ориентацию, которую видит наша 3D-камера.
+    //
+    // Мир сцены — right-handed, Z-up (Z вверх, -Y "к зрителю" во FRONT-view).
+    // CSS 3D-мир — с точки зрения матричной алгебры это тоже right-handed
+    // (+X вправо, +Y вверх, +Z к зрителю), но браузер применяет perspective так,
+    // что визуально ось Z оказывается "инвертирована" относительно right-handed
+    // OpenGL-конвенции three.js. Из-за этого прямое копирование матрицы даёт
+    // зеркальный поворот в некоторых ракурсах (BACK ↔ FRONT, LEFT ↔ RIGHT после
+    // определённых пользовательских поворотов).
+    //
+    // Решение: строим ориентацию через векторы right/up камеры (в системе сцены,
+    // Z-up), переводим их в CSS-систему (Y-up) через фиксированную перестановку осей,
+    // и составляем матрицу вручную. Никакой возни с matrix inversion / хиральностью.
+
+    const camQuat = camera.quaternion.clone();
+
+    // Векторы right/up/forward камеры В МИРЕ сцены. forward — куда смотрит камера.
+    const camRight   = new THREE.Vector3(1, 0, 0).applyQuaternion(camQuat);
+    const camUp      = new THREE.Vector3(0, 1, 0).applyQuaternion(camQuat);
+    const camForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camQuat); // three.js: -Z вперёд
+
+    // Мир сцены — Z-up right-handed (Z вверх).
+    // CSS-мир — тоже right-handed, НО ось Y инвертирована при рендере:
+    //   +Y_css направлено ВНИЗ на экране, +X_css — вправо, +Z_css — к зрителю.
+    // Значит "верх экрана" в CSS = -Y_css.
+    //
+    // Ставим соответствие: сторона сцены ↔ грань кубика (в её физической CSS-позиции):
+    //   FRONT (-Y_scene)  ↔ +Z_css (translateZ(30))
+    //   BACK  (+Y_scene)  ↔ -Z_css
+    //   RIGHT (+X_scene)  ↔ +X_css
+    //   LEFT  (-X_scene)  ↔ -X_css
+    //   TOP   (+Z_scene)  ↔ -Y_css  ← rotateX(90) translateZ(30) кладёт грань на -Y_css
+    //   BOTTOM(-Z_scene)  ↔ +Y_css
+    // Отсюда перестановка f: (x, y, z)_scene → (x, -z, -y)_css.
+    function toCss(v) { return [v.x, -v.z, -v.y]; }
+
+    const cx = toCss(camRight);
+    const cy = toCss(camUp);
+    const cz = toCss(camForward.clone().negate());
+
+    // Ставим три условия на матрицу M (переводит cube-local → CSS-world):
+    //   M * cx = (+1, 0, 0)  — грань, соответствующая правому направлению камеры, справа на экране
+    //   M * cy = (0, -1, 0)  — грань в направлении CamUp должна оказаться сверху экрана,
+    //                          а верх экрана в CSS — это именно -Y_css (из-за Y-flip)
+    //   M * cz = (0, 0, +1)  — грань "к камере" должна смотреть на CSS-зрителя (+Z_css)
+    //
+    // Значит M^{-1} имеет колонки [cx, -cy, cz]. Для ортогонального M имеем M = (M^{-1})^T,
+    // то есть его СТРОКИ — это [cx, -cy, cz].
+    //
+    // Ранее я не учитывал знак у cy (CSS Y-flip), из-за чего TOP и BOTTOM менялись местами
+    // при переключении на TOP-view.
+
+    // CSS matrix3d принимает column-major, а строки M = [cx, -cy, cz],
+    // значит N-я колонка матрицы = (cx[N], -cy[N], cz[N]).
+    const mat =
+      cx[0]+','+(-cy[0])+','+cz[0]+',0,'+
+      cx[1]+','+(-cy[1])+','+cz[1]+',0,'+
+      cx[2]+','+(-cy[2])+','+cz[2]+',0,'+
+      '0,0,0,1';
+    cubeElement.style.transform = 'translate(-50%, -50%) matrix3d(' + mat + ')';
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+    updateCube();
+    updateAllMeasureLabels();
+  }
+  animate();
+
+  window.addEventListener('resize', () => {
+    const aspect = container.clientWidth / container.clientHeight;
+    if (camera.isPerspectiveCamera) {
+      camera.aspect = aspect;
+    } else {
+      // Сохраняем высоту frustum'а, пересчитываем ширину под новый aspect
+      const h = camera.top - camera.bottom;
+      const w = h * aspect;
+      camera.left = -w/2; camera.right = w/2;
+    }
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+  });
+
+  // --- Цвет ---
+  function colorTarget() {
+    return (selectedPart && partsPanelOpen) ? selectedPart : modelGroup;
+  }
+  function setModelColor(hex) {
+    colorTarget().traverse(o => {
+      if ((o.isMesh || o.isPoints) && o.material) {
+        // У Points с per-vertex цветами меняем только material.color — на рендер оно
+        // не влияет (vertexColors=true даёт умножение), но останется на будущее.
+        o.material.color.set(hex);
+      }
+    });
+  }
+  function restoreOriginalColors() {
+    modelGroup.traverse(o => {
+      if ((o.isMesh || o.isPoints) && o.material && o.userData.originalColor !== undefined) {
+        o.material.color.setHex(o.userData.originalColor);
+      }
+    });
+  }
+  function resetColorAndOpacity() {
+    restoreOriginalColors();
+    // Сбрасываем слайдер и применяем 100% прозрачности
+    const slider = document.getElementById('opacity-slider');
+    const valueLabel = document.getElementById('opacity-value');
+    if (slider) slider.value = 100;
+    if (valueLabel) valueLabel.textContent = '100%';
+    setModelOpacity(1.0);
+    // Сбрасываем и сам color-picker к нейтральному значению по умолчанию
+    const picker = document.getElementById('color-picker');
+    if (picker) picker.value = '#b0b0b8';
+  }
+  let lookBefore = null;
+  const captureLook = () => { if (!lookBefore) lookBefore = snapshotLook(modelGroup); };
+  const commitLook = () => { if (lookBefore) { const snap = lookBefore; pushUndo(() => restoreLook(snap)); lookBefore = null; } };
+  const colorPickerEl = document.getElementById('color-picker');
+  colorPickerEl.addEventListener('click', captureLook);
+  colorPickerEl.addEventListener('focus', captureLook);
+  colorPickerEl.addEventListener('input', e => { captureLook(); setModelColor(e.target.value); });
+  colorPickerEl.addEventListener('change', commitLook);
+  document.getElementById('btn-color-reset').addEventListener('click', () => {
+    const snap = snapshotLook(modelGroup);
+    pushUndo(() => restoreLook(snap));
+    resetColorAndOpacity();
+  });
+
+  // Прозрачность модели. В three.js материал должен явно знать, что он прозрачный
+  // (transparent=true), иначе opacity игнорируется. При полностью непрозрачном (100%)
+  // выключаем флаг — это даёт корректное освещение и нормальный depth-write.
+  function setModelOpacity(value01) {
+    const transparent = value01 < 0.999;
+    colorTarget().traverse(o => {
+      if ((o.isMesh || o.isPoints) && o.material) {
+        o.material.transparent = transparent;
+        o.material.opacity = value01;
+        o.material.depthWrite = !transparent;
+        o.material.needsUpdate = true;
+      }
+    });
+  }
+  const opacitySlider = document.getElementById('opacity-slider');
+  const opacityValue = document.getElementById('opacity-value');
+  opacitySlider.addEventListener('pointerdown', captureLook);
+  opacitySlider.addEventListener('keydown', captureLook);
+  opacitySlider.addEventListener('change', commitLook);
+  opacitySlider.addEventListener('input', e => {
+    captureLook();
+    const pct = parseInt(e.target.value, 10);
+    opacityValue.textContent = pct + '%';
+    setModelOpacity(pct / 100);
+  });
+
+  // === Измерения (множественные) ============================================
+  // Состояние объявлено выше в начале initApp.
+  // Каждое измерение — объект { id, a, b, markers: [], line, label, midpoint }
+
+  const raycaster = new THREE.Raycaster();
+  const mouseNDC = new THREE.Vector2();
+
+  const measureBtn = document.getElementById('btn-measure');
+  const measureRadiusBtn = document.getElementById('btn-measure-radius');
+
+  function setMeasureMode(mode) {
+    if (mode !== 'none' && alignActive()) cancelAlign();
+    measureMode = mode;
+    measureBtn.classList.toggle('active', mode === 'distance');
+    measureRadiusBtn.classList.toggle('active', mode === 'radius');
+    container.classList.toggle('measure-mode', mode !== 'none');
+    measureHint.style.display = mode !== 'none' ? 'block' : 'none';
+    cancelPending();
+    if (mode === 'none') {
+      hideSnapPreview();
+      statusEl.textContent = t('measure_off');
+    } else if (mode === 'distance') {
+      statusEl.textContent = t('dist_prompt');
+    } else if (mode === 'radius') {
+      statusEl.textContent = t('radius_prompt');
+    }
+  }
+  measureBtn.addEventListener('click', () => {
+    setMeasureMode(measureMode === 'distance' ? 'none' : 'distance');
+  });
+  measureRadiusBtn.addEventListener('click', () => {
+    setMeasureMode(measureMode === 'radius' ? 'none' : 'radius');
+  });
+
+  document.getElementById('btn-clear-measure').addEventListener('click', () => clearAllMeasurements(true));
+  document.getElementById('m-delete').addEventListener('click', () => {
+    if (activeMeasurementId !== null) deleteMeasurement(activeMeasurementId);
+  });
+
+  // Скрыть/показать все измерения (toggle видимости разметки и плашек).
+  const toggleVisibilityBtn = document.getElementById('btn-toggle-visibility');
+  toggleVisibilityBtn.addEventListener('click', () => {
+    measurementsVisible = !measurementsVisible;
+    toggleVisibilityBtn.classList.toggle('active', !measurementsVisible);
+    toggleVisibilityBtn.textContent = measurementsVisible ? '👁' : '⊘';
+    for (const m of measurements) setMeasurementVisible(m, measurementsVisible);
+    statusEl.textContent = measurementsVisible
+      ? t('measurements_shown')
+      : t('measurements_hidden', { n: measurements.length });
+  });
+
+  function setMeasurementVisible(m, visible) {
+    for (const obj of m.objects) obj.visible = visible;
+    if (m.label) m.label.style.display = visible ? '' : 'none';
+  }
+
+  function detachMeasurement(m) {
+    for (const obj of m.objects) scene.remove(obj);
+    if (m.label && m.label.parentNode) m.label.parentNode.removeChild(m.label);
+  }
+  function attachMeasurement(m, idx) {
+    for (const obj of m.objects) scene.add(obj);
+    if (m.label) document.body.appendChild(m.label);
+    setMeasurementVisible(m, measurementsVisible);
+    measurements.splice(Math.min(idx, measurements.length), 0, m);
+  }
+
+  function deleteMeasurement(id) {
+    const idx = measurements.findIndex(m => m.id === id);
+    if (idx === -1) return;
+    const removed = measurements[idx];
+    detachMeasurement(removed);
+    measurements.splice(idx, 1);
+    pushUndo(() => { attachMeasurement(removed, idx); setActiveMeasurement(removed.id); });
+    if (activeMeasurementId === id) {
+      if (measurements.length > 0) {
+        const newIdx = Math.min(idx, measurements.length - 1);
+        setActiveMeasurement(measurements[newIdx].id);
+      } else {
+        activeMeasurementId = null;
+        updateActivePanel();
+      }
+    } else {
+      updateActivePanel();
+    }
+  }
+
+  function cancelPending() {
+    for (const marker of pendingMarkers) {
+      scene.remove(marker);
+      marker.geometry.dispose();
+      marker.material.dispose();
+    }
+    pendingMarkers = [];
+    pendingPoints = [];
+  }
+
+  function clearAllMeasurements(record) {
+    cancelPending();
+    if (record === true && measurements.length) {
+      const saved = measurements.slice();
+      for (const m of saved) detachMeasurement(m);
+      pushUndo(() => { saved.forEach((m, i) => attachMeasurement(m, i)); updateActivePanel(); });
+    } else {
+      for (const m of measurements) disposeMeasurement(m);
+    }
+    measurements.length = 0;
+    activeMeasurementId = null;
+    updateActivePanel();
+  }
+
+  // m.objects — массив всех three.js объектов измерения (маркеры, линия, круг и т.п.)
+  // m.label — HTML-плашка
+  function disposeMeasurement(m) {
+    for (const obj of m.objects) {
+      scene.remove(obj);
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) obj.material.dispose();
+    }
+    if (m.label && m.label.parentNode) m.label.parentNode.removeChild(m.label);
+  }
+
+  function makeMarker(point, color) {
+    const geom = new THREE.SphereGeometry(measureMarkerRadius, 16, 16);
+    const mat = new THREE.MeshBasicMaterial({ color: color, depthTest: false });
+    const sphere = new THREE.Mesh(geom, mat);
+    sphere.position.copy(point);
+    sphere.renderOrder = 999;
+    scene.add(sphere);
+    return sphere;
+  }
+
+  function makeLine(a, b, color) {
+    const geom = new THREE.BufferGeometry().setFromPoints([a, b]);
+    const mat = new THREE.LineBasicMaterial({ color: color || 0xffcc33, depthTest: false });
+    const line = new THREE.Line(geom, mat);
+    line.renderOrder = 998;
+    scene.add(line);
+    return line;
+  }
+
+  // Кольцо/окружность в 3D: задаётся центром, нормалью к плоскости и радиусом.
+  function makeCircle(center, normal, radius, color) {
+    const segments = 64;
+    const points = [];
+    // Базис в плоскости круга: u — произвольный перпендикулярный normal, v = normal × u
+    const u = new THREE.Vector3();
+    if (Math.abs(normal.x) < 0.9) u.set(1, 0, 0); else u.set(0, 1, 0);
+    u.sub(normal.clone().multiplyScalar(u.dot(normal))).normalize();
+    const v = new THREE.Vector3().crossVectors(normal, u).normalize();
+    for (let i = 0; i <= segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      const p = center.clone()
+        .add(u.clone().multiplyScalar(Math.cos(a) * radius))
+        .add(v.clone().multiplyScalar(Math.sin(a) * radius));
+      points.push(p);
+    }
+    const geom = new THREE.BufferGeometry().setFromPoints(points);
+    const mat = new THREE.LineBasicMaterial({ color: color || 0xffcc33, depthTest: false });
+    const line = new THREE.Line(geom, mat);
+    line.renderOrder = 998;
+    scene.add(line);
+    return line;
+  }
+
+  function computeDominant(a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const ax = [
+      { name: 'ΔX', val: dx },
+      { name: 'ΔY', val: dy },
+      { name: 'ΔZ', val: dz }
+    ];
+    let dom = ax[0];
+    for (const x of ax) if (Math.abs(x.val) > Math.abs(dom.val)) dom = x;
+    return dom;
+  }
+
+  function makeLabel(measurement, text, prefix) {
+    const label = document.createElement('div');
+    label.className = 'measure-label';
+    label.innerHTML =
+      '<span class="idx">#' + measurement.id + '</span>' +
+      (prefix ? '<span class="axis">' + prefix + '</span>' : '') +
+      '<span>' + text + '</span>';
+    label.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setActiveMeasurement(measurement.id);
+    });
+    document.body.appendChild(label);
+    return label;
+  }
+
+  // --- Дистанционное измерение (2 точки) ---
+  function addDistanceMeasurement(a, b) {
+    const markerA = makeMarker(a, 0x4ade80);
+    const markerB = makeMarker(b, 0xef4444);
+    const line = makeLine(a, b, 0xffcc33);
+    const m = {
+      id: nextId++,
+      type: 'distance',
+      a: a.clone(),
+      b: b.clone(),
+      objects: [markerA, markerB, line],
+      label: null,
+      midpoint: a.clone().add(b).multiplyScalar(0.5)
+    };
+    const dom = computeDominant(m.a, m.b);
+    m.label = makeLabel(m, Math.abs(dom.val).toFixed(3), dom.name);
+    if (!measurementsVisible) setMeasurementVisible(m, false);
+    measurements.push(m);
+    pushUndo(() => {
+      const i = measurements.indexOf(m);
+      if (i !== -1) measurements.splice(i, 1);
+      disposeMeasurement(m);
+      if (activeMeasurementId === m.id) activeMeasurementId = measurements.length ? measurements[measurements.length - 1].id : null;
+      if (activeMeasurementId !== null) setActiveMeasurement(activeMeasurementId); else updateActivePanel();
+    });
+    setActiveMeasurement(m.id);
+  }
+
+  // --- Радиус по 3 точкам ---
+  // Центр описанной окружности трёх точек p1,p2,p3 в 3D.
+  // Решение через линейную алгебру: центр лежит в плоскости (p1,p2,p3)
+  // и равноудалён от всех трёх. Возвращает { center, radius, normal } или null если коллинеарны.
+  function circleFrom3Points(p1, p2, p3) {
+    const v12 = new THREE.Vector3().subVectors(p2, p1);
+    const v13 = new THREE.Vector3().subVectors(p3, p1);
+    const normal = new THREE.Vector3().crossVectors(v12, v13);
+    const normalLenSq = normal.lengthSq();
+    if (normalLenSq < 1e-12) return null; // точки коллинеарны
+    normal.normalize();
+
+    const v12LenSq = v12.lengthSq();
+    const v13LenSq = v13.lengthSq();
+    // Формула: center = p1 + ( |v13|² * (v12 - (v12·v13/v13² * v13)) ... ) — есть готовая форма:
+    // см. https://en.wikipedia.org/wiki/Circumscribed_circle#Higher_dimensions
+    const cross = new THREE.Vector3().crossVectors(v12, v13);
+    const crossLenSq = cross.lengthSq();
+    const alpha = (v13LenSq * v12.clone().sub(v13).dot(v12.clone().multiplyScalar(-1)) ) ; // не используется, пишем напрямую
+    // Перепишу по понятной формуле:
+    // center = p1 + ( (|v13|² * (v12 · v12 - v12 · v13)) * v12 + (|v12|² * (v13 · v13 - v12 · v13)) * v13 ) / (2 * |v12 × v13|²)
+    const d12_13 = v12.dot(v13);
+    const factor1 = (v13LenSq * (v12LenSq - d12_13)) / (2 * crossLenSq);
+    const factor2 = (v12LenSq * (v13LenSq - d12_13)) / (2 * crossLenSq);
+    const center = p1.clone()
+      .add(v12.clone().multiplyScalar(factor1))
+      .add(v13.clone().multiplyScalar(factor2));
+    const radius = center.distanceTo(p1);
+    return { center: center, radius: radius, normal: normal };
+  }
+
+  function addRadiusMeasurement(p1, p2, p3) {
+    const circ = circleFrom3Points(p1, p2, p3);
+    if (!circ) {
+      statusEl.textContent = t('collinear');
+      return;
+    }
+    const { center, radius, normal } = circ;
+    const distCenterToMid = center.distanceTo(p2); // p2 — средняя/отсчётная точка
+
+    const markerCenter = makeMarker(center, 0x6a9aef);
+    const markerA = makeMarker(p1, 0x4ade80);
+    const markerMid = makeMarker(p2, 0xffd866); // средняя — выделяем
+    const markerB = makeMarker(p3, 0xef4444);
+    // Только одна линия — от центра до средней точки (это и есть радиус).
+    const rayMid = makeLine(center, p2, 0xffd866);
+
+    const m = {
+      id: nextId++,
+      type: 'radius',
+      p1: p1.clone(), p2: p2.clone(), p3: p3.clone(),
+      center: center.clone(),
+      radius: radius,
+      normal: normal.clone(),
+      distCenterToMid: distCenterToMid,
+      objects: [markerCenter, markerA, markerMid, markerB, rayMid],
+      label: null,
+      midpoint: center.clone().add(p2).multiplyScalar(0.5) // плашку — на середину линии
+    };
+    m.label = makeLabel(m, 'R ' + radius.toFixed(3), '⌒');
+    if (!measurementsVisible) setMeasurementVisible(m, false);
+    measurements.push(m);
+    pushUndo(() => {
+      const i = measurements.indexOf(m);
+      if (i !== -1) measurements.splice(i, 1);
+      disposeMeasurement(m);
+      if (activeMeasurementId === m.id) activeMeasurementId = measurements.length ? measurements[measurements.length - 1].id : null;
+      if (activeMeasurementId !== null) setActiveMeasurement(activeMeasurementId); else updateActivePanel();
+    });
+    setActiveMeasurement(m.id);
+  }
+
+  function setActiveMeasurement(id) {
+    activeMeasurementId = id;
+    for (const m of measurements) {
+      m.label.classList.toggle('active', m.id === id);
+    }
+    updateActivePanel();
+  }
+
+  function updateActivePanel() {
+    if (activeMeasurementId === null || measurements.length === 0) {
+      measurePanel.style.display = 'none';
+      return;
+    }
+    const m = measurements.find(x => x.id === activeMeasurementId);
+    if (!m) { measurePanel.style.display = 'none'; return; }
+    const fmt = v => v.toFixed(3);
+    document.getElementById('m-num').textContent = '#' + m.id;
+    document.getElementById('m-meta').textContent = t('total') + measurements.length;
+
+    const rowDist = document.getElementById('row-dist');
+    const rowDx = document.getElementById('row-dx');
+    const rowDy = document.getElementById('row-dy');
+    const rowDz = document.getElementById('row-dz');
+    [rowDist, rowDx, rowDy, rowDz].forEach(r => r.classList.remove('dominant'));
+
+    if (m.type === 'distance') {
+      const a = m.a, b = m.b;
+      const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      rowDist.querySelector('.label').textContent = t('dist_label');
+      rowDist.style.display = '';
+      rowDx.style.display = ''; rowDy.style.display = ''; rowDz.style.display = '';
+      rowDx.querySelector('.label').textContent = 'ΔX:';
+      rowDy.querySelector('.label').textContent = 'ΔY:';
+      rowDz.querySelector('.label').textContent = 'ΔZ:';
+      document.getElementById('m-dist').textContent = fmt(dist);
+      document.getElementById('m-dx').textContent = fmt(dx);
+      document.getElementById('m-dy').textContent = fmt(dy);
+      document.getElementById('m-dz').textContent = fmt(dz);
+      const axes = [
+        { id: 'row-dx', val: dx },
+        { id: 'row-dy', val: dy },
+        { id: 'row-dz', val: dz }
+      ];
+      let dom = axes[0];
+      for (const x of axes) if (Math.abs(x.val) > Math.abs(dom.val)) dom = x;
+      document.getElementById(dom.id).classList.add('dominant');
+    } else if (m.type === 'radius') {
+      rowDist.querySelector('.label').textContent = t('radius_label');
+      document.getElementById('m-dist').textContent = fmt(m.radius);
+      rowDist.classList.add('dominant');
+      rowDx.style.display = ''; rowDy.style.display = ''; rowDz.style.display = '';
+      rowDx.querySelector('.label').textContent = t('to_mid');
+      document.getElementById('m-dx').textContent = fmt(m.distCenterToMid);
+      rowDy.querySelector('.label').textContent = t('center_y');
+      document.getElementById('m-dy').textContent = fmt(m.center.y);
+      rowDz.querySelector('.label').textContent = t('center_xz');
+      document.getElementById('m-dz').textContent = fmt(m.center.x) + ', ' + fmt(m.center.z);
+    }
+
+    document.getElementById('m-hint').style.display =
+      measurements.length > 1 ? 'block' : 'none';
+    measurePanel.style.display = 'block';
+  }
+
+  // Каждый кадр: позиционирование всех плашек в экранных координатах
+  function updateAllMeasureLabels() {
+    if (measurements.length === 0 || !measurementsVisible) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    for (const m of measurements) {
+      const v = m.midpoint.clone().project(camera);
+      if (v.z > 1 || v.z < -1) {
+        m.label.style.display = 'none';
+        continue;
+      }
+      m.label.style.display = '';
+      const x = (v.x * 0.5 + 0.5) * rect.width + rect.left;
+      const y = (-v.y * 0.5 + 0.5) * rect.height + rect.top;
+      m.label.style.left = x + 'px';
+      m.label.style.top  = y + 'px';
+    }
+  }
+
+  // === Snap к рёбрам и вершинам ===========================================
+  // Возвращает { point: Vector3, type: 'vertex'|'edge'|'face', hit: hitInfo }
+  // или null, если ничего не попало.
+  // Приоритеты: вершина → ребро → поверхность.
+  // Базовые радиусы маленькие, чтобы не "перепрыгивать" на соседнее ребро у тонких
+  // стенок (например, 0.5 мм). Если в радиусе оказывается несколько кандидатов
+  // и второй слишком близко к первому, мы не snap-аем — это защита от неоднозначности.
+  const VERTEX_PX = 8;
+  const EDGE_PX = 6;
+  const AMBIGUITY_PX = 3; // если второй кандидат ближе этого — отказываемся от snap
+
+  function project(p, rect) {
+    const v = p.clone().project(camera);
+    return {
+      x: (v.x * 0.5 + 0.5) * rect.width,
+      y: (-v.y * 0.5 + 0.5) * rect.height,
+      behind: v.z > 1
+    };
+  }
+
+  function findSnapPoint(clientX, clientY) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const mx = clientX - rect.left;
+    const my = clientY - rect.top;
+
+    // Raycast по мешам: нужен для face-режима, а также чтобы фильтровать
+    // невидимые рёбра/вершины (кандидат не должен быть дальше поверхности объекта).
+    // Для облаков точек мешей нет — тогда пропускаем depth-фильтр.
+    mouseNDC.x = (mx / rect.width) * 2 - 1;
+    mouseNDC.y = -(my / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouseNDC, camera);
+
+    const meshes = [];
+    modelGroup.traverse(o => { if (o.isMesh && snapAllowed(o.userData.part)) meshes.push(o); });
+    const hasMeshes = meshes.length > 0;
+    const hasVertices = vertexList.length > 0;
+    if (!hasMeshes && !hasVertices) return null;
+
+    let faceHit = null;
+    let maxDepth = Infinity; // без ограничения по умолчанию (для облаков точек)
+    if (hasMeshes) {
+      const intersects = raycaster.intersectObjects(meshes, true);
+      if (intersects.length > 0) {
+        faceHit = intersects[0];
+        const camPos = camera.position;
+        const depthTolerance = camPos.distanceTo(faceHit.point) * 0.01 + measureMarkerRadius * 5;
+        maxDepth = camPos.distanceTo(faceHit.point) + depthTolerance;
+      } else if (!hasVertices) {
+        return null;
+      }
+    }
+    const camPos = camera.position;
+
+    // --- 1. Поиск ближайшей вершины ---
+    let bestVertex = null, bestVertexDist = VERTEX_PX;
+    let secondVertexDist = Infinity;
+    for (const v of vertexList) {
+      if (!snapAllowed(v.part)) continue;
+      if (camPos.distanceTo(v) > maxDepth) continue;
+      const p = project(v, rect);
+      if (p.behind) continue;
+      const d = Math.hypot(p.x - mx, p.y - my);
+      if (d < bestVertexDist) {
+        secondVertexDist = bestVertexDist;
+        bestVertexDist = d;
+        bestVertex = v;
+      } else if (d < secondVertexDist) {
+        secondVertexDist = d;
+      }
+    }
+    // Если есть две вершины почти в одной точке экрана (тонкая стенка, видно обе грани) —
+    // отказываемся от snap: пользователь должен подвести курсор точнее.
+    if (bestVertex && (secondVertexDist - bestVertexDist) > AMBIGUITY_PX) {
+      return { point: bestVertex.clone(), type: 'vertex', hit: faceHit };
+    }
+
+    // --- 2. Поиск ближайшего ребра ---
+    let bestEdge = null, bestEdgeDist = EDGE_PX, bestEdgePoint = null;
+    let secondEdgeDist = Infinity;
+    for (const seg of edgeSegments) {
+      if (!snapAllowed(seg.part)) continue;
+      // отсечь сегменты сзади и слишком дальние
+      const midDist = camPos.distanceTo(seg.a.clone().add(seg.b).multiplyScalar(0.5));
+      if (midDist > maxDepth + seg.a.distanceTo(seg.b)) continue;
+
+      const pa = project(seg.a, rect);
+      const pb = project(seg.b, rect);
+      if (pa.behind || pb.behind) continue;
+
+      const dx = pb.x - pa.x, dy = pb.y - pa.y;
+      const lenSq = dx*dx + dy*dy;
+      if (lenSq < 0.5) continue;
+      let t = ((mx - pa.x) * dx + (my - pa.y) * dy) / lenSq;
+      t = Math.max(0, Math.min(1, t));
+      const cx = pa.x + dx * t, cy = pa.y + dy * t;
+      const dist = Math.hypot(cx - mx, cy - my);
+      if (dist < bestEdgeDist) {
+        secondEdgeDist = bestEdgeDist;
+        bestEdgeDist = dist;
+        bestEdge = seg;
+        bestEdgePoint = seg.a.clone().lerp(seg.b, t);
+      } else if (dist < secondEdgeDist) {
+        secondEdgeDist = dist;
+      }
+    }
+    if (bestEdge && (secondEdgeDist - bestEdgeDist) > AMBIGUITY_PX) {
+      return { point: bestEdgePoint, type: 'edge', hit: faceHit };
+    }
+
+    // --- 3. Fallback: точка на поверхности (если есть меш) ---
+    if (faceHit) {
+      return { point: faceHit.point.clone(), type: 'face', hit: faceHit };
+    }
+    // Облако точек и мы не попали ни в одну вершину — snap не сработал
+    return null;
+  }
+
+  // === Превью-маркер за курсором в режиме измерения =========================
+  // Цвет показывает, к чему сейчас прикрепимся: жёлтый = вершина, голубой = ребро,
+  // зелёный = поверхность.
+  let snapPreview = null;
+  let currentSnap = null;
+
+  function ensureSnapPreview() {
+    if (snapPreview) return;
+    const geom = new THREE.SphereGeometry(1, 16, 16); // радиус подкрутим перед каждым показом
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.95 });
+    snapPreview = new THREE.Mesh(geom, mat);
+    snapPreview.renderOrder = 1000;
+    snapPreview.visible = false;
+    scene.add(snapPreview);
+  }
+
+  function hideSnapPreview() {
+    if (snapPreview) snapPreview.visible = false;
+    currentSnap = null;
+  }
+
+  function showSnapPreview(snap) {
+    ensureSnapPreview();
+    snapPreview.position.copy(snap.point);
+    // Размер: для вершины — крупнее (это якорная точка), для ребра/face — компактный.
+    const baseR = measureMarkerRadius;
+    const scale = snap.type === 'vertex' ? 1.6 : (snap.type === 'edge' ? 1.2 : 1.0);
+    snapPreview.scale.setScalar(baseR * scale);
+    const color = snap.type === 'vertex' ? 0xffd866 : (snap.type === 'edge' ? 0x6ad6ef : 0x4ade80);
+    snapPreview.material.color.setHex(color);
+    snapPreview.visible = true;
+  }
+
+  // Курсор движется → пересчитываем snap (троттлить здесь не нужно, операций мало)
+  renderer.domElement.addEventListener('pointermove', (event) => {
+    if (measureMode === 'none' && !alignActive()) { hideSnapPreview(); return; }
+    applyAlignSnapFilter();
+    if (alignActive() && alignKind === 'face') {
+      const fh = raycastFace(event.clientX, event.clientY);
+      if (!fh) { hideSnapPreview(); return; }
+      showSnapPreview({ point: fh.point, type: 'face' });
+      return;
+    }
+    const snap = findSnapPoint(event.clientX, event.clientY);
+    if (!snap) { hideSnapPreview(); return; }
+    currentSnap = snap;
+    showSnapPreview(snap);
+  });
+  renderer.domElement.addEventListener('pointerleave', () => hideSnapPreview());
+
+  // --- Клик-измерение по сцене ---
+  renderer.domElement.addEventListener('pointerdown', (event) => {
+    if (measureMode === 'none' || event.button !== 0) return;
+    const startX = event.clientX, startY = event.clientY;
+
+    const onUp = (upEvent) => {
+      renderer.domElement.removeEventListener('pointerup', onUp);
+      if (Math.abs(upEvent.clientX - startX) > 4 || Math.abs(upEvent.clientY - startY) > 4) return;
+
+      const snap = findSnapPoint(upEvent.clientX, upEvent.clientY);
+      if (!snap) {
+        statusEl.textContent = t('point_missed');
+        return;
+      }
+      const hitPoint = snap.point;
+      const snapDesc = snap.type === 'vertex' ? t('snap_vertex') : (snap.type === 'edge' ? t('snap_edge') : t('snap_face'));
+
+      // Цвет временного маркера зависит от того, какая по счёту точка набирается
+      const markerColors = [0x4ade80, 0xffd866, 0xef4444];
+      const idx = pendingPoints.length;
+      pendingPoints.push(hitPoint);
+      pendingMarkers.push(makeMarker(hitPoint, markerColors[idx] || 0xffffff));
+
+      const needed = measureMode === 'radius' ? 3 : 2;
+      const remaining = needed - pendingPoints.length;
+
+      if (remaining > 0) {
+        if (measureMode === 'radius') {
+          if (pendingPoints.length === 1) statusEl.textContent = t('radius_1_3', { snap: snapDesc });
+          else if (pendingPoints.length === 2) statusEl.textContent = t('radius_2_3', { snap: snapDesc });
+        } else {
+          statusEl.textContent = t('first_point', { snap: snapDesc });
+        }
+        return;
+      }
+
+      // Все точки собраны — фиксируем измерение, временные маркеры убираем
+      const points = pendingPoints.slice();
+      cancelPending();
+
+      let success = false;
+      let addedId = null;
+      let isRadius = false;
+      if (measureMode === 'distance') {
+        addDistanceMeasurement(points[0], points[1]);
+        success = true;
+        addedId = nextId - 1;
+      } else if (measureMode === 'radius') {
+        const beforeCount = measurements.length;
+        addRadiusMeasurement(points[0], points[1], points[2]);
+        if (measurements.length > beforeCount) {
+          success = true;
+          addedId = nextId - 1;
+          isRadius = true;
+        }
+      }
+      if (success) {
+        setMeasureMode('none');
+        statusEl.textContent = t(isRadius ? 'radius_added' : 'measure_added', { id: addedId });
+      }
+    };
+    renderer.domElement.addEventListener('pointerup', onUp);
+  });
+
+  // --- Парсер STEP ---
+  let occtPromise = null;
+  function getOcct() {
+    if (occtPromise) return occtPromise;
+    occtPromise = occtimportjs({
+      locateFile: f => 'https://cdn.jsdelivr.net/npm/occt-import-js@0.0.22/dist/' + f
+    });
+    return occtPromise;
+  }
+
+  // ======================================================================
+  // === Детали / сборка ==================================================
+  // Каждая загруженная модель — отдельная THREE.Group ("деталь") внутри modelGroup.
+  // У детали свои position/rotation, поэтому её можно двигать и вращать независимо.
+  // Рёбра и вершины для snap хранятся в ЛОКАЛЬНЫХ координатах детали
+  // (part.userData.localEdges/localVerts) и пересчитываются в мировые после
+  // каждого перемещения (rebuildSnapCache).
+  // ======================================================================
+  const parts = [];
+  let currentPart = null;      // деталь, в которую сейчас грузится геометрия
+  let selectedPart = null;
+  let appendNext = false;      // следующий loadFile добавляет, а не заменяет
+  let partTool = 'move';       // 'move' | 'rotate' | 'align'
+  let partsPanelOpen = false;
+  let snapOnly = null, snapExclude = null;   // фильтры snap для режима совмещения
+  let alignStep = 0;           // 0 = выкл, 1 = ждём точку на детали, 2 = ждём целевую точку
+  let alignSource = null;
+  let alignMarker = null;
+  let alignKind = 'point';     // 'point' — точка к точке, 'face' — плоскость к плоскости
+  let alignSourceNormal = null;
+  let alignArrow = null;
+  let lastMate = null;         // { part, point, normal } — для поворота на 90° вокруг грани
+  let nextPartNum = 1;
+  const PART_TINTS = [0xb0b0b8, 0x7fb3e6, 0xe6b07f, 0x8fd18f, 0xd18fc4, 0xe6dc7f, 0x7fd6d1, 0xe68f8f];
+
+  const partsPanel = document.getElementById('parts-panel');
+  const ppList = document.getElementById('pp-list');
+  const ppPos = document.getElementById('pp-pos');
+
+  function snapAllowed(part) {
+    if (part && part.visible === false) return false;
+    if (snapOnly && part !== snapOnly) return false;
+    if (snapExclude && part === snapExclude) return false;
+    return true;
+  }
+
+  function makePart(name) {
+    const g = new THREE.Group();
+    g.name = name || ('Part ' + nextPartNum);
+    g.userData.isPart = true;
+    g.userData.num = nextPartNum++;
+    g.userData.localEdges = [];
+    g.userData.localVerts = [];
+    modelGroup.add(g);
+    parts.push(g);
+    return g;
+  }
+  function ensureDefaultPart() { currentPart = makePart('Part'); return currentPart; }
+
+  function disposeObject(root) {
+    root.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) {
+        if (Array.isArray(o.material)) o.material.forEach(m => m.dispose());
+        else o.material.dispose();
+      }
+    });
+  }
+
+  function clearScene() {
+    clearUndo();
+    clearAllMeasurements();
+    cancelAlign();
+    selectPart(null);
+    scene.remove(modelGroup);
+    disposeObject(modelGroup);
+    parts.length = 0;
+    currentPart = null;
+    nextPartNum = 1;
+    modelGroup = new THREE.Group();
+    scene.add(modelGroup);
+    edgeSegments = [];
+    vertexList = [];
+    renderPartsList();
+  }
+
+  // Начинаем новую деталь. В режиме "добавить" старые детали остаются.
+  function beginPart(name) {
+    const adding = appendNext && parts.length > 0;
+    if (!adding) clearScene();
+    currentPart = makePart(name);
+  }
+
+  // Вызывается после загрузки файла: убирает пустую деталь (если загрузка упала),
+  // ставит новую деталь рядом со сборкой, обновляет snap-кэш и список.
+  function finishPart() {
+    const wasAppend = appendNext;
+    appendNext = false;
+    const part = currentPart;
+    currentPart = null;
+    if (!part) return;
+    if (part.children.length === 0) {
+      modelGroup.remove(part);
+      parts.splice(parts.indexOf(part), 1);
+      renderPartsList();
+      return;
+    }
+    if (wasAppend && parts.length > 1) {
+      // Ставим новую деталь справа от остальных (по +X), чтобы они не наложились
+      const others = new THREE.Box3();
+      for (const p of parts) if (p !== part) others.expandByObject(p);
+      const own = new THREE.Box3().setFromObject(part);
+      if (!others.isEmpty() && !own.isEmpty()) {
+        const gap = Math.max(others.getSize(new THREE.Vector3()).length(), 1) * 0.1;
+        part.position.x += others.max.x - own.min.x + gap;
+        part.position.y += others.getCenter(new THREE.Vector3()).y - own.getCenter(new THREE.Vector3()).y;
+      }
+      // Раскрашиваем добавленные детали в разные цвета, чтобы их различать
+      const tint = PART_TINTS[(part.userData.num - 1) % PART_TINTS.length];
+      part.traverse(o => {
+        if ((o.isMesh || o.isPoints) && o.material && !o.material.vertexColors) {
+          o.material.color.setHex(tint);
+          o.userData.originalColor = tint;
+        }
+      });
+      setPartsPanel(true);
+    }
+    part.userData.homePos = part.position.clone();
+    part.userData.homeQuat = part.quaternion.clone();
+    rebuildSnapCache();
+    fitToModel();
+    if (wasAppend) {
+      selectPart(part);
+      pushUndo(() => removePartObject(part));
+    }
+    renderPartsList();
+  }
+
+  // Пересчёт рёбер/вершин всех деталей в мировые координаты (для snap)
+  function rebuildSnapCache() {
+    edgeSegments = [];
+    vertexList = [];
+    modelGroup.updateMatrixWorld(true);
+    for (const p of parts) {
+      const m = p.matrixWorld;
+      for (const e of p.userData.localEdges) {
+        edgeSegments.push({ a: e.a.clone().applyMatrix4(m), b: e.b.clone().applyMatrix4(m), part: p });
+      }
+      for (const v of p.userData.localVerts) {
+        const w = v.clone().applyMatrix4(m);
+        w.part = p;
+        vertexList.push(w);
+      }
+    }
+  }
+
+  // ---------- Гизмо перемещения/вращения ----------
+  const transformCtl = new THREE.TransformControls(camera, renderer.domElement);
+  transformCtl.setSpace('world');
+  transformCtl.setRotationSnap(THREE.MathUtils.degToRad(15));
+  transformCtl.setSize(0.9);
+  transformCtl.addEventListener('dragging-changed', e => { controls.enabled = !e.value; });
+  transformCtl.addEventListener('objectChange', () => updatePartPosLabel());
+  let gizmoBefore = null;
+  transformCtl.addEventListener('mouseDown', () => { if (transformCtl.object) gizmoBefore = snapshotTransform(transformCtl.object); });
+  transformCtl.addEventListener('mouseUp', () => {
+    if (gizmoBefore) { pushTransformUndo(gizmoBefore); gizmoBefore = null; }
+    rebuildSnapCache(); updatePartPosLabel();
+  });
+  scene.add(transformCtl);
+
+  function applyGizmo() {
+    if (selectedPart && partsPanelOpen && (partTool === 'move' || partTool === 'rotate')) {
+      transformCtl.setMode(partTool === 'move' ? 'translate' : 'rotate');
+      transformCtl.attach(selectedPart);
+    } else {
+      transformCtl.detach();
+    }
+  }
+
+  function highlightPart(part, on) {
+    part.traverse(o => {
+      if (o.isMesh && o.material && o.material.emissive) o.material.emissive.setHex(on ? 0x1d3d70 : 0x000000);
+    });
+  }
+
+  function selectPart(part) {
+    if (selectedPart) highlightPart(selectedPart, false);
+    selectedPart = part;
+    if (selectedPart) highlightPart(selectedPart, true);
+    if (alignStep) cancelAlign();
+    applyGizmo();
+    updatePartPosLabel();
+    renderPartsList();
+    if (typeof updateWireBtn === 'function') updateWireBtn();
+  }
+
+  function updatePartPosLabel() {
+    if (!ppPos) return;
+    if (!selectedPart) { ppPos.textContent = ''; return; }
+    const p = selectedPart.position, r = selectedPart.rotation;
+    const d = v => THREE.MathUtils.radToDeg(v).toFixed(0);
+    ppPos.textContent = 'X ' + p.x.toFixed(2) + '  Y ' + p.y.toFixed(2) + '  Z ' + p.z.toFixed(2) +
+      '  ∠ ' + d(r.x) + '/' + d(r.y) + '/' + d(r.z) + '°';
+  }
+
+  // Панель ставим сразу под тулбаром — он может переноситься на 2 строки
+  function placePartsPanel() {
+    const ui = document.getElementById('ui');
+    const r = ui.getBoundingClientRect();
+    partsPanel.style.top = Math.round(r.bottom + 8) + 'px';
+    partsPanel.style.maxHeight = 'calc(100% - ' + Math.round(r.bottom + 60) + 'px)';
+  }
+  window.addEventListener('resize', () => { if (partsPanelOpen) placePartsPanel(); });
+  i18nCallbacks.push(() => { if (partsPanelOpen) placePartsPanel(); });
+
+  function setPartsPanel(open) {
+    partsPanelOpen = open;
+    partsPanel.style.display = open ? 'block' : 'none';
+    if (open) placePartsPanel();
+    document.getElementById('btn-parts').classList.toggle('active', open);
+    if (!open) cancelAlign();
+    applyGizmo();
+    renderPartsList();
+  }
+
+  function setPartTool(tool) {
+    if (!partsPanelOpen) setPartsPanel(true);
+    if (tool === 'align' || tool === 'mate') {
+      if (!selectedPart) { statusEl.textContent = t('select_part_first'); return; }
+      if (measureMode !== 'none') setMeasureMode('none');
+      cancelAlign();
+      partTool = tool;
+      alignKind = tool === 'mate' ? 'face' : 'point';
+      alignStep = 1;
+      statusEl.textContent = t(tool === 'mate' ? 'mate_step1' : 'align_step1');
+    } else {
+      cancelAlign();
+      partTool = tool;
+    }
+    document.getElementById('pp-move').classList.toggle('active', partTool === 'move');
+    document.getElementById('pp-rotate').classList.toggle('active', partTool === 'rotate');
+    document.getElementById('pp-align').classList.toggle('active', partTool === 'align');
+    document.getElementById('pp-mate').classList.toggle('active', partTool === 'mate');
+    container.classList.toggle('measure-mode', partTool === 'align' || partTool === 'mate' || measureMode !== 'none');
+    applyGizmo();
+  }
+
+  function alignActive() { return alignStep > 0; }
+
+  // Фильтр snap: на шаге 1 — только выбранная деталь, на шаге 2 — всё, кроме неё
+  function applyAlignSnapFilter() {
+    if (alignStep === 1) { snapOnly = selectedPart; snapExclude = null; }
+    else if (alignStep === 2) { snapOnly = null; snapExclude = selectedPart; }
+    else { snapOnly = null; snapExclude = null; }
+  }
+
+  function cancelAlign() {
+    const wasAligning = alignStep > 0;
+    alignStep = 0;
+    alignSource = null;
+    snapOnly = snapExclude = null;
+    if (alignMarker) {
+      scene.remove(alignMarker); alignMarker.geometry.dispose(); alignMarker.material.dispose();
+      alignMarker = null;
+    }
+    if (alignArrow) { scene.remove(alignArrow); alignArrow = null; }
+    alignSourceNormal = null;
+    if (wasAligning) {
+      partTool = 'move';
+      ['pp-move','pp-rotate','pp-align','pp-mate'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.classList.toggle('active', id === 'pp-move');
+      });
+      container.classList.toggle('measure-mode', measureMode !== 'none');
+      hideSnapPreview();
+      applyGizmo();
+    }
+  }
+
+  // Луч в точку экрана → попадание в грань: мировая точка и нормаль,
+  // развёрнутая к камере (видимая сторона = внешняя сторона грани).
+  function raycastFace(clientX, clientY) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouseNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    mouseNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouseNDC, camera);
+    const meshes = [];
+    modelGroup.traverse(o => { if (o.isMesh && snapAllowed(o.userData.part)) meshes.push(o); });
+    const hits = raycaster.intersectObjects(meshes, false);
+    if (!hits.length || !hits[0].face) return null;
+    const h = hits[0];
+    const n = h.face.normal.clone().transformDirection(h.object.matrixWorld).normalize();
+    if (n.dot(raycaster.ray.direction) > 0) n.negate();
+    return { point: h.point.clone(), normal: n };
+  }
+
+  // Поворот детали вокруг мировой точки pivot кватернионом q
+  function rotatePartAround(part, q, pivot) {
+    part.position.sub(pivot).applyQuaternion(q).add(pivot);
+    part.quaternion.premultiply(q);
+    part.updateMatrixWorld(true);
+  }
+
+  function handleMateClick(clientX, clientY) {
+    applyAlignSnapFilter();
+    const fh = raycastFace(clientX, clientY);
+    if (!fh) { statusEl.textContent = t('point_missed'); return; }
+    if (alignStep === 1) {
+      alignSource = fh.point;
+      alignSourceNormal = fh.normal;
+      alignMarker = makeMarker(alignSource, 0xff66cc);
+      const len = getModelInfo().maxDim * 0.12;
+      alignArrow = new THREE.ArrowHelper(fh.normal, fh.point, len, 0xff66cc, len * 0.3, len * 0.15);
+      scene.add(alignArrow);
+      alignStep = 2;
+      statusEl.textContent = t('mate_step2');
+    } else if (alignStep === 2) {
+      const part = selectedPart;
+      const before = snapshotTransform(part);
+      // 1) разворачиваем деталь: нормаль её грани должна смотреть против нормали цели
+      const q = new THREE.Quaternion().setFromUnitVectors(alignSourceNormal, fh.normal.clone().negate());
+      rotatePartAround(part, q, alignSource);
+      // 2) двигаем: кликнутая точка детали ложится в кликнутую точку цели
+      part.position.add(fh.point.clone().sub(alignSource));
+      part.updateMatrixWorld(true);
+      lastMate = { part: part, point: fh.point.clone(), normal: fh.normal.clone() };
+      pushTransformUndo(before);
+      rebuildSnapCache();
+      cancelAlign();
+      updatePartPosLabel();
+      statusEl.textContent = t('mate_done');
+    }
+  }
+
+  function handleAlignClick(clientX, clientY) {
+    if (alignKind === 'face') { handleMateClick(clientX, clientY); return; }
+    applyAlignSnapFilter();
+    const snap = findSnapPoint(clientX, clientY);
+    if (!snap) { statusEl.textContent = t('point_missed'); return; }
+    if (alignStep === 1) {
+      alignSource = snap.point.clone();
+      alignMarker = makeMarker(alignSource, 0xff66cc);
+      alignStep = 2;
+      statusEl.textContent = t('align_step2');
+    } else if (alignStep === 2) {
+      const delta = snap.point.clone().sub(alignSource);
+      const before = snapshotTransform(selectedPart);
+      selectedPart.position.add(delta);
+      pushTransformUndo(before);
+      selectedPart.updateMatrixWorld(true);
+      rebuildSnapCache();
+      statusEl.textContent = t('align_done', { d: delta.length().toFixed(3) });
+      cancelAlign();
+      updatePartPosLabel();
+    }
+  }
+
+  function partFromObject(o) {
+    while (o && !(o.userData && o.userData.isPart)) o = o.parent;
+    return o || null;
+  }
+
+  // Клик по модели (без перетаскивания) — выбор детали / шаг совмещения
+  renderer.domElement.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0 || measureMode !== 'none') return;
+    if (!partsPanelOpen && !alignActive()) return;
+    if (transformCtl.axis) return; // нажали на ручку гизмо
+    const sx = ev.clientX, sy = ev.clientY;
+    const up = (e2) => {
+      renderer.domElement.removeEventListener('pointerup', up);
+      if (Math.abs(e2.clientX - sx) > 4 || Math.abs(e2.clientY - sy) > 4) return;
+      if (alignActive()) { handleAlignClick(e2.clientX, e2.clientY); return; }
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouseNDC.x = ((e2.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseNDC.y = -((e2.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouseNDC, camera);
+      const meshes = [];
+      modelGroup.traverse(o => { if ((o.isMesh || o.isPoints) && partFromObject(o) && partFromObject(o).visible) meshes.push(o); });
+      const hits = raycaster.intersectObjects(meshes, false);
+      selectPart(hits.length ? partFromObject(hits[0].object) : null);
+    };
+    renderer.domElement.addEventListener('pointerup', up);
+  });
+
+  function doUndo() {
+    if (alignActive()) { cancelAlign(); statusEl.textContent = t('align_cancel'); return; }
+    if (pendingPoints.length) { cancelPending(); statusEl.textContent = t('undo_done'); return; }
+    const fn = undoStack.pop();
+    updateUndoBtn();
+    if (!fn) { statusEl.textContent = t('undo_empty'); return; }
+    fn();
+    modelGroup.updateMatrixWorld(true);
+    rebuildSnapCache();
+    renderPartsList();
+    updatePartPosLabel();
+    updateWireBtn();
+    updateActivePanel();
+    statusEl.textContent = t('undo_done');
+  }
+  document.getElementById('btn-undo').addEventListener('click', doUndo);
+
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z' || e.code === 'KeyZ')) {
+      if (e.target && /TEXTAREA/.test(e.target.tagName)) return;
+      if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'number') return;
+      e.preventDefault();
+      doUndo();
+      return;
+    }
+    if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+    if (e.key === 'Escape') {
+      if (alignActive()) { cancelAlign(); statusEl.textContent = t('align_cancel'); }
+      else if (selectedPart) selectPart(null);
+    } else if (partsPanelOpen && selectedPart && (e.key === 'Delete')) {
+      deletePart(selectedPart);
+    }
+  });
+
+  function removePartObject(part) {
+    if (lastMate && lastMate.part === part) lastMate = null;
+    if (selectedPart === part) selectPart(null);
+    modelGroup.remove(part);
+    const i = parts.indexOf(part);
+    if (i !== -1) parts.splice(i, 1);
+    rebuildSnapCache();
+    renderPartsList();
+    return i;
+  }
+  function deletePart(part) {
+    const idx = removePartObject(part);
+    pushUndo(() => {
+      modelGroup.add(part);
+      parts.splice(Math.min(Math.max(idx, 0), parts.length), 0, part);
+      selectPart(part);
+    });
+  }
+
+  function renderPartsList() {
+    if (!ppList) return;
+    ppList.innerHTML = '';
+    for (const p of parts) {
+      const row = document.createElement('div');
+      row.className = 'pp-row' + (p === selectedPart ? ' sel' : '') + (p.visible ? '' : ' hid');
+      let swColor = '#b0b0b8';
+      p.traverse(o => { if ((o.isMesh || o.isPoints) && o.material && o.material.color && swColor === '#b0b0b8') swColor = '#' + o.material.color.getHexString(); });
+      const sw = document.createElement('input');
+      sw.type = 'color'; sw.className = 'sw'; sw.value = swColor; sw.title = t('part_color');
+      let swBefore = null;
+      sw.addEventListener('click', (e) => { e.stopPropagation(); swBefore = snapshotLook(p); });
+      sw.addEventListener('change', () => { if (swBefore) { const snap = swBefore; pushUndo(() => restoreLook(snap)); swBefore = null; } });
+      sw.addEventListener('input', (e) => {
+        const c = new THREE.Color(e.target.value);
+        p.traverse(o => { if ((o.isMesh || o.isPoints) && o.material && o.material.color) o.material.color.copy(c); });
+      });
+      const wire = document.createElement('button');
+      wire.textContent = '▦'; wire.title = t('wire_title');
+      if (partIsWire(p)) wire.classList.add('active');
+      wire.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const snap = snapshotLook(p);
+        pushUndo(() => restoreLook(snap));
+        setWire(p, !partIsWire(p));
+        updateWireBtn();
+        renderPartsList();
+      });
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = p.name; nm.title = p.name;
+      const vis = document.createElement('button'); vis.textContent = p.visible ? '👁' : '⊘'; vis.title = t('part_toggle_vis');
+      const del = document.createElement('button'); del.textContent = '✕'; del.title = t('part_delete');
+      row.append(sw, nm, wire, vis, del);
+      row.addEventListener('click', () => selectPart(p === selectedPart ? null : p));
+      vis.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wasVisible = p.visible;
+        pushUndo(() => { p.visible = wasVisible; });
+        p.visible = !p.visible;
+        if (!p.visible && selectedPart === p) selectPart(null);
+        renderPartsList();
+      });
+      del.addEventListener('click', (e) => { e.stopPropagation(); deletePart(p); });
+      ppList.appendChild(row);
+    }
+  }
+
+  // ---------- кнопки панели ----------
+  document.getElementById('btn-parts').addEventListener('click', () => setPartsPanel(!partsPanelOpen));
+  document.getElementById('pp-close').addEventListener('click', () => setPartsPanel(false));
+  document.getElementById('pp-clear').addEventListener('click', () => {
+    if (!parts.length) { statusEl.textContent = t('export_no_model'); return; }
+    if (!confirmClear()) return;
+    clearScene();
+    lastMate = null;
+    statusEl.textContent = t('parts_cleared');
+  });
+  // Подтверждение без браузерного confirm(): второе нажатие в течение 3 с
+  let clearArmedUntil = 0;
+  function confirmClear() {
+    const now = Date.now();
+    const btn = document.getElementById('pp-clear');
+    if (now < clearArmedUntil) { clearArmedUntil = 0; btn.classList.remove('active'); return true; }
+    clearArmedUntil = now + 3000;
+    btn.classList.add('active');
+    statusEl.textContent = t('parts_clear_confirm');
+    setTimeout(() => { if (Date.now() >= clearArmedUntil) btn.classList.remove('active'); }, 3100);
+    return false;
+  }
+  document.getElementById('pp-move').addEventListener('click', () => setPartTool('move'));
+  document.getElementById('pp-rotate').addEventListener('click', () => setPartTool('rotate'));
+  document.getElementById('pp-align').addEventListener('click', () => setPartTool('align'));
+  document.getElementById('pp-mate').addEventListener('click', () => setPartTool('mate'));
+  document.getElementById('pp-flip').addEventListener('click', () => {
+    if (!lastMate || parts.indexOf(lastMate.part) === -1) { statusEl.textContent = t('flip_none'); return; }
+    // Поворот на 90° вокруг нормали последней стыковки — грани остаются прижатыми
+    const q = new THREE.Quaternion().setFromAxisAngle(lastMate.normal, Math.PI / 2);
+    const before = snapshotTransform(lastMate.part);
+    rotatePartAround(lastMate.part, q, lastMate.point);
+    pushTransformUndo(before);
+    rebuildSnapCache(); updatePartPosLabel();
+  });
+  document.getElementById('pp-floor').addEventListener('click', () => {
+    if (!selectedPart) { statusEl.textContent = t('select_part_first'); return; }
+    const b = new THREE.Box3().setFromObject(selectedPart);
+    const before = snapshotTransform(selectedPart);
+    if (!b.isEmpty()) selectedPart.position.z -= b.min.z;
+    pushTransformUndo(before);
+    rebuildSnapCache(); updatePartPosLabel();
+  });
+  document.getElementById('pp-resetpos').addEventListener('click', () => {
+    if (!selectedPart) { statusEl.textContent = t('select_part_first'); return; }
+    const before = snapshotTransform(selectedPart);
+    if (selectedPart.userData.homePos) selectedPart.position.copy(selectedPart.userData.homePos);
+    if (selectedPart.userData.homeQuat) selectedPart.quaternion.copy(selectedPart.userData.homeQuat);
+    pushTransformUndo(before);
+    rebuildSnapCache(); updatePartPosLabel();
+  });
+  document.querySelectorAll('[data-nudge]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!selectedPart) { statusEl.textContent = t('select_part_first'); return; }
+      const step = parseFloat(document.getElementById('pp-step').value) || 0;
+      const k = btn.dataset.nudge;
+      const sign = k[1] === '+' ? 1 : -1;
+      const before = snapshotTransform(selectedPart);
+      selectedPart.position[k[0]] += sign * step;
+      pushTransformUndo(before);
+      rebuildSnapCache(); updatePartPosLabel();
+    });
+  });
+  document.getElementById('file-input-add').addEventListener('change', e => {
+    const files = Array.from(e.target.files || []);
+    if (files.length) { appendNext = true; loadFile(files); }
+    e.target.value = '';
+  });
+  i18nCallbacks.push(() => renderPartsList());
+
+  // ---------- Каркасный вид ----------
+  // Если открыта панель и выбрана деталь — переключаем только её, иначе всю сцену.
+  function partIsWire(part) {
+    let w = false;
+    part.traverse(o => { if (o.isMesh && o.material && o.material.wireframe) w = true; });
+    return w;
+  }
+  function setWire(root, on) {
+    root.traverse(o => { if (o.isMesh && o.material) { o.material.wireframe = on; o.material.needsUpdate = true; } });
+  }
+  function updateWireBtn() {
+    const btn = document.getElementById('btn-wire');
+    const on = (selectedPart && partsPanelOpen) ? partIsWire(selectedPart) : wireframeAll;
+    btn.classList.toggle('active', on);
+  }
+  document.getElementById('btn-wire').addEventListener('click', () => {
+    const snap = snapshotLook(modelGroup);
+    pushUndo(() => restoreLook(snap));
+    if (selectedPart && partsPanelOpen) {
+      setWire(selectedPart, !partIsWire(selectedPart));
+    } else {
+      wireframeAll = !wireframeAll;
+      setWire(modelGroup, wireframeAll);
+    }
+    updateWireBtn();
+    renderPartsList();
+  });
+
+  // Хранилище feature-рёбер для snap-привязки при измерении.
+  // edgeSegments — массив { a: Vector3, b: Vector3 } в мировых координатах.
+  // vertexSet — Map "x,y,z" -> Vector3, чтобы вершины уникальны.
+  let edgeSegments = [];
+  let vertexList = [];
+
+  function addLoadedMesh(geometry, color) {
+    let needNormals = !geometry.attributes.normal;
+    if (!needNormals) {
+      // Некоторые экспортёры пишут в STL нулевые нормали — модель тогда рисуется чёрной
+      const na = geometry.attributes.normal.array;
+      let nonZero = false;
+      for (let i = 0; i < Math.min(na.length, 3000); i++) if (na[i] !== 0) { nonZero = true; break; }
+      needNormals = !nonZero;
+    }
+    if (needNormals) geometry.computeVertexNormals();
+    // Текущее значение слайдера прозрачности (если он уже инициализирован)
+    const slider = document.getElementById('opacity-slider');
+    const opacity = slider ? parseInt(slider.value, 10) / 100 : 1.0;
+    const transparent = opacity < 0.999;
+    const material = new THREE.MeshStandardMaterial({
+      color: color, metalness: 0.3, roughness: 0.55,
+      side: THREE.DoubleSide, flatShading: false,
+      transparent: transparent, opacity: opacity, depthWrite: !transparent
+    });
+    material.wireframe = wireframeAll;
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.userData.originalColor = color;
+    const part = currentPart || ensureDefaultPart();
+    mesh.userData.part = part;
+    part.add(mesh);
+
+    // Извлекаем feature-рёбра: ребро между двумя треугольниками включается,
+    // если угол между их нормалями больше 30° (т.е. это острый край, а не плоскость).
+    // Для STL это даёт настоящие края формы, для STEP — границы граней CAD.
+    const edgeGeom = new THREE.EdgesGeometry(geometry, 30);
+    const posAttr = edgeGeom.attributes.position;
+    const vertexMap = new Map(); // дедупликация вершин этого меша
+    for (let i = 0; i < posAttr.count; i += 2) {
+      const a = new THREE.Vector3(posAttr.getX(i),   posAttr.getY(i),   posAttr.getZ(i));
+      const b = new THREE.Vector3(posAttr.getX(i+1), posAttr.getY(i+1), posAttr.getZ(i+1));
+      part.userData.localEdges.push({ a: a, b: b });
+      const ka = a.x.toFixed(4)+','+a.y.toFixed(4)+','+a.z.toFixed(4);
+      const kb = b.x.toFixed(4)+','+b.y.toFixed(4)+','+b.z.toFixed(4);
+      if (!vertexMap.has(ka)) vertexMap.set(ka, a);
+      if (!vertexMap.has(kb)) vertexMap.set(kb, b);
+    }
+    for (const v of vertexMap.values()) part.userData.localVerts.push(v);
+    edgeGeom.dispose();
+  }
+
+  // Добавление облака точек. Использует THREE.Points вместо Mesh.
+  // Все вершины точек регистрируем в vertexList — тогда snap-к-вершинам работает
+  // прямо из коробки: клик по точке = snap к ней. Рёбер у облака нет.
+  function addLoadedPoints(geometry, defaultColor) {
+    const hasVertexColors = !!geometry.attributes.color;
+    // Размер точки в пикселях. sizeAttenuation: false — точки одного размера
+    // независимо от расстояния, так удобнее видеть плотные и разреженные участки.
+    const material = new THREE.PointsMaterial({
+      color: hasVertexColors ? 0xffffff : defaultColor,
+      size: 2.0,
+      sizeAttenuation: false,
+      vertexColors: hasVertexColors
+    });
+    const points = new THREE.Points(geometry, material);
+    points.userData.originalColor = defaultColor;
+    points.userData.isPointCloud = true;
+    const part = currentPart || ensureDefaultPart();
+    points.userData.part = part;
+    part.add(points);
+
+    // Регистрируем все точки как snap-цели. Ограничиваем 200 000 — иначе snap-поиск
+    // на облаке в миллион точек будет тормозить (перебор O(n) на каждое движение мыши).
+    // При большем количестве берём равномерное подмножество.
+    const posAttr = geometry.attributes.position;
+    const total = posAttr.count;
+    const cap = 200000;
+    const step = Math.max(1, Math.floor(total / cap));
+    for (let i = 0; i < total; i += step) {
+      part.userData.localVerts.push(new THREE.Vector3(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)));
+    }
+  }
+
+  let lastLoadedFileName = null;
+
+  // Принимает один File или массив File[]. Если пришёл массив (multi-select или drop),
+  // ищем в нём основной файл (по расширению), а остальные передаём как "дополнительные" —
+  // они нужны для .gltf, который ссылается на внешние .bin и текстуры.
+  async function loadFile(fileOrFiles) {
+    const files = Array.isArray(fileOrFiles) ? fileOrFiles
+                  : (fileOrFiles && fileOrFiles.length !== undefined ? Array.from(fileOrFiles) : [fileOrFiles]);
+    if (files.length === 0) return;
+
+    // Ищем "основной" файл: приоритет главных 3D-форматов над вспомогательными (.bin, текстуры).
+    const mainRe = /\.(step|stp|stl|obj|fbx|glb|gltf|3mf|ply|pcd|xyz)$/i;
+    let main = files.find(f => mainRe.test(f.name));
+    if (!main) {
+      statusEl.textContent = t('unsupported', { name: files[0].name });
+      return;
+    }
+    lastLoadedFileName = main.name;
+
+    if (/\.(step|stp)$/i.test(main.name)) {
+      await loadStepFile(main);
+    } else if (/\.stl$/i.test(main.name)) {
+      await loadStlFile(main);
+    } else if (/\.obj$/i.test(main.name)) {
+      await loadObjFile(main);
+    } else if (/\.fbx$/i.test(main.name)) {
+      await loadFbxFile(main);
+    } else if (/\.(glb|gltf)$/i.test(main.name)) {
+      await loadGltfFile(main, files);
+    } else if (/\.3mf$/i.test(main.name)) {
+      await load3mfFile(main);
+    } else if (/\.ply$/i.test(main.name)) {
+      await loadPlyFile(main);
+    } else if (/\.pcd$/i.test(main.name)) {
+      await loadPcdFile(main);
+    } else if (/\.xyz$/i.test(main.name)) {
+      await loadXyzFile(main);
+    } else {
+      statusEl.textContent = t('unsupported', { name: main.name });
+    }
+    finishPart();
+  }
+
+  // Достаёт все меши из иерархии загруженной сцены (OBJ/FBX/GLB могут иметь nested groups)
+  // и добавляет их в modelGroup через addLoadedMesh — так все фичи (snap, цвет, прозрачность)
+  // работают одинаково для любого формата.
+  function addObjectToScene(root) {
+    // Применяем матрицы иерархии, чтобы все меши оказались в мировых координатах —
+    // это критично для snap-логики, которая работает с world-space вершинами.
+    root.updateMatrixWorld(true);
+    let count = 0;
+    root.traverse(child => {
+      if (!child.isMesh || !child.geometry) return;
+      // Клонируем геометрию и применяем мировую матрицу — избавляемся от родительских трансформаций
+      const geom = child.geometry.clone();
+      geom.applyMatrix4(child.matrixWorld);
+      // Пытаемся сохранить цвет из материала оригинала
+      let color = 0xb0b0b8;
+      if (child.material) {
+        const mat = Array.isArray(child.material) ? child.material[0] : child.material;
+        if (mat && mat.color) color = mat.color.getHex();
+      }
+      addLoadedMesh(geom, color);
+      count++;
+    });
+    return count;
+  }
+
+  async function loadStlFile(file) {
+    loaderEl.style.display = 'block';
+    loaderEl.textContent = t('loading');
+    statusEl.textContent = t('file_loading', { name: file.name });
+    try {
+      const buffer = await file.arrayBuffer();
+      const loader = new THREE.STLLoader();
+      const geometry = loader.parse(buffer);
+      beginPart(file.name);
+      addLoadedMesh(geometry, 0xb0b0b8);
+      fitToModel();
+      statusEl.textContent = t('stl_loaded', { name: file.name });
+    } catch (err) {
+      statusEl.textContent = t('err_prefix') + 'STL: ' + err.message;
+    } finally {
+      loaderEl.style.display = 'none';
+    }
+  }
+
+  async function loadObjFile(file) {
+    if (typeof THREE.OBJLoader === 'undefined') {
+      statusEl.textContent = t('err_prefix') + 'OBJLoader not loaded';
+      return;
+    }
+    loaderEl.style.display = 'block';
+    loaderEl.textContent = t('loading');
+    statusEl.textContent = t('file_loading', { name: file.name });
+    try {
+      const text = await file.text(); // OBJ — текстовый формат
+      const loader = new THREE.OBJLoader();
+      const obj = loader.parse(text);
+      beginPart(file.name);
+      addObjectToScene(obj);
+      fitToModel();
+      statusEl.textContent = t('obj_loaded', { name: file.name });
+    } catch (err) {
+      statusEl.textContent = t('err_prefix') + 'OBJ: ' + err.message;
+    } finally {
+      loaderEl.style.display = 'none';
+    }
+  }
+
+  async function loadFbxFile(file) {
+    if (typeof THREE.FBXLoader === 'undefined') {
+      statusEl.textContent = t('err_prefix') + 'FBXLoader not loaded';
+      return;
+    }
+    loaderEl.style.display = 'block';
+    loaderEl.textContent = t('loading');
+    statusEl.textContent = t('file_loading', { name: file.name });
+    try {
+      const buffer = await file.arrayBuffer();
+      const loader = new THREE.FBXLoader();
+      const obj = loader.parse(buffer, ''); // второй аргумент — path для текстур; для геометрии не важен
+      beginPart(file.name);
+      addObjectToScene(obj);
+      fitToModel();
+      statusEl.textContent = t('fbx_loaded', { name: file.name });
+    } catch (err) {
+      statusEl.textContent = t('err_prefix') + 'FBX: ' + err.message;
+    } finally {
+      loaderEl.style.display = 'none';
+    }
+  }
+
+  async function loadGltfFile(file, allFiles) {
+    if (typeof THREE.GLTFLoader === 'undefined') {
+      statusEl.textContent = t('err_prefix') + 'GLTFLoader not loaded';
+      return;
+    }
+    loaderEl.style.display = 'block';
+    loaderEl.textContent = t('loading');
+    statusEl.textContent = t('file_loading', { name: file.name });
+
+    // Индекс всех предоставленных файлов по имени (в нижнем регистре) — так GLTFLoader
+    // сможет найти .bin и текстуры, на которые ссылается .gltf, без HTTP-запросов.
+    // Blob URLs автоматически освободятся после закрытия страницы; для чистоты — сами
+    // отзовём их после парсинга.
+    const blobUrls = new Map();
+    const createdUrls = [];
+    if (allFiles && allFiles.length) {
+      for (const f of allFiles) {
+        if (f === file) continue;
+        const url = URL.createObjectURL(f);
+        blobUrls.set(f.name.toLowerCase(), url);
+        createdUrls.push(url);
+      }
+    }
+
+    // LoadingManager перехватывает URL перед загрузкой. GLTFLoader попытается сделать
+    // fetch на "model.bin" — мы его перехватываем и подставляем blob:-URL нашего файла.
+    const manager = new THREE.LoadingManager();
+    manager.setURLModifier((url) => {
+      // Убираем префиксы вроде "./" и вытаскиваем чистое имя файла
+      let clean = url.replace(/^\.?\//, '');
+      // Если URL — это уже blob:/data:/http: (например, .gltf сам передан как ArrayBuffer),
+      // не трогаем.
+      if (/^(blob|data|https?):/.test(clean)) return url;
+      // Ищем по имени файла (с учётом только последнего сегмента пути)
+      const base = clean.split('/').pop().toLowerCase();
+      if (blobUrls.has(base)) return blobUrls.get(base);
+      return url; // отдаём как есть — если файла нет, fetch выдаст осмысленную ошибку
+    });
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const loader = new THREE.GLTFLoader(manager);
+      await new Promise((resolve, reject) => {
+        loader.parse(buffer, '', (gltf) => {
+          beginPart(file.name);
+          addObjectToScene(gltf.scene);
+          fitToModel();
+          const extraCount = createdUrls.length;
+          statusEl.textContent = t('gltf_loaded', { name: file.name })
+            + (extraCount ? ' (+' + extraCount + ' aux)' : '');
+          resolve();
+        }, reject);
+      });
+    } catch (err) {
+      statusEl.textContent = t('err_prefix') + 'glTF: ' + err.message;
+    } finally {
+      // Освобождаем blob URL'ы — они уже свою работу сделали
+      for (const u of createdUrls) URL.revokeObjectURL(u);
+      loaderEl.style.display = 'none';
+    }
+  }
+
+  async function load3mfFile(file) {
+    if (typeof THREE.ThreeMFLoader === 'undefined') {
+      statusEl.textContent = t('err_prefix') + '3MFLoader not loaded';
+      return;
+    }
+    loaderEl.style.display = 'block';
+    loaderEl.textContent = t('loading');
+    statusEl.textContent = t('file_loading', { name: file.name });
+    try {
+      const buffer = await file.arrayBuffer();
+      const loader = new THREE.ThreeMFLoader();
+      const obj = loader.parse(buffer);
+      beginPart(file.name);
+      addObjectToScene(obj);
+      fitToModel();
+      statusEl.textContent = t('tmf_loaded', { name: file.name });
+    } catch (err) {
+      statusEl.textContent = t('err_prefix') + '3MF: ' + err.message;
+    } finally {
+      loaderEl.style.display = 'none';
+    }
+  }
+
+  // === Облака точек ==========================================================
+
+  async function loadPlyFile(file) {
+    if (typeof THREE.PLYLoader === 'undefined') {
+      statusEl.textContent = t('err_prefix') + 'PLYLoader not loaded';
+      return;
+    }
+    loaderEl.style.display = 'block';
+    loaderEl.textContent = t('loading');
+    statusEl.textContent = t('file_loading', { name: file.name });
+    try {
+      const buffer = await file.arrayBuffer();
+      const loader = new THREE.PLYLoader();
+      const geometry = loader.parse(buffer);
+      beginPart(file.name);
+      // PLY может быть мешем (есть индексы граней) или облаком точек (только вершины).
+      // Определяем по наличию индексов.
+      if (geometry.index) {
+        addLoadedMesh(geometry, 0xb0b0b8);
+        statusEl.textContent = t('ply_loaded_mesh', { name: file.name, n: geometry.index.count / 3 });
+      } else {
+        addLoadedPoints(geometry, 0xb0b0b8);
+        statusEl.textContent = t('ply_loaded_points', { name: file.name, n: geometry.attributes.position.count });
+      }
+      fitToModel();
+    } catch (err) {
+      statusEl.textContent = t('err_prefix') + 'PLY: ' + err.message;
+    } finally {
+      loaderEl.style.display = 'none';
+    }
+  }
+
+  async function loadPcdFile(file) {
+    if (typeof THREE.PCDLoader === 'undefined') {
+      statusEl.textContent = t('err_prefix') + 'PCDLoader not loaded';
+      return;
+    }
+    loaderEl.style.display = 'block';
+    loaderEl.textContent = t('loading');
+    statusEl.textContent = t('file_loading', { name: file.name });
+    try {
+      const buffer = await file.arrayBuffer();
+      const loader = new THREE.PCDLoader();
+      // parse возвращает уже готовый Points-объект — вытащим из него геометрию,
+      // чтобы применить наши общие настройки материала через addLoadedPoints.
+      const points = loader.parse(buffer, '');
+      beginPart(file.name);
+      addLoadedPoints(points.geometry, 0xb0b0b8);
+      fitToModel();
+      statusEl.textContent = t('pcd_loaded', { name: file.name, n: points.geometry.attributes.position.count });
+    } catch (err) {
+      statusEl.textContent = t('err_prefix') + 'PCD: ' + err.message;
+    } finally {
+      loaderEl.style.display = 'none';
+    }
+  }
+
+  // Простой формат: каждая строка — "x y z" или "x y z r g b" (0-255).
+  // Разделитель — пробел, таб или запятая.
+  async function loadXyzFile(file) {
+    loaderEl.style.display = 'block';
+    loaderEl.textContent = t('loading');
+    statusEl.textContent = t('file_loading', { name: file.name });
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/);
+      const positions = [];
+      const colors = [];
+      let hasColors = false;
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) continue;
+        const parts = trimmed.split(/[\s,]+/).map(parseFloat);
+        if (parts.length < 3 || parts.some(v => !isFinite(v))) continue;
+        positions.push(parts[0], parts[1], parts[2]);
+        if (parts.length >= 6) {
+          hasColors = true;
+          // Автоопределение: если значения ≤ 1.0, считаем это float [0..1]; иначе int [0..255]
+          const maxC = Math.max(parts[3], parts[4], parts[5]);
+          const scale = maxC > 1.0 ? 1/255 : 1.0;
+          colors.push(parts[3]*scale, parts[4]*scale, parts[5]*scale);
+        } else if (hasColors) {
+          colors.push(1, 1, 1); // недостающие — белые
+        }
+      }
+      if (positions.length === 0) throw new Error('No valid points');
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      if (hasColors && colors.length === positions.length) {
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      }
+      beginPart(file.name);
+      addLoadedPoints(geometry, 0xb0b0b8);
+      fitToModel();
+      statusEl.textContent = t('xyz_loaded', { name: file.name, n: positions.length / 3 });
+    } catch (err) {
+      statusEl.textContent = t('err_prefix') + 'XYZ: ' + err.message;
+    } finally {
+      loaderEl.style.display = 'none';
+    }
+  }
+
+  async function loadStepFile(file) {
+    loaderEl.style.display = 'block';
+    loaderEl.textContent = t('loading');
+    statusEl.textContent = t('file_loading', { name: file.name });
+    try {
+      const occt = await getOcct();
+      loaderEl.textContent = t('loading');
+      const buffer = await file.arrayBuffer();
+      loaderEl.textContent = t('loading');
+      const result = occt.ReadStepFile(new Uint8Array(buffer), null);
+      if (!result.success) throw new Error('Парсер вернул success=false');
+
+      beginPart(file.name);
+      let meshCount = 0;
+      for (const m of result.meshes) {
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(m.attributes.position.array);
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+        if (m.attributes.normal && m.attributes.normal.array) {
+          const normals = new Float32Array(m.attributes.normal.array);
+          geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+        }
+        if (m.index && m.index.array) {
+          const indices = Array.from(m.index.array);
+          const maxIdx = indices.length ? Math.max.apply(null, indices) : 0;
+          const IndexArray = maxIdx > 65535 ? Uint32Array : Uint16Array;
+          geometry.setIndex(new THREE.BufferAttribute(new IndexArray(indices), 1));
+        }
+        let color = 0xb0b0b8;
+        if (m.color && m.color.length >= 3) {
+          const r = Math.round(m.color[0] * 255);
+          const g = Math.round(m.color[1] * 255);
+          const b = Math.round(m.color[2] * 255);
+          color = (r << 16) | (g << 8) | b;
+        }
+        addLoadedMesh(geometry, color);
+        meshCount++;
+      }
+      fitToModel();
+      statusEl.textContent = t('loaded_parts', { name: file.name, n: meshCount });
+    } catch (err) {
+      statusEl.textContent = t('err_prefix') + err.message;
+    } finally {
+      loaderEl.style.display = 'none';
+    }
+  }
+
+  // --- UI ---
+  document.getElementById('file-input').addEventListener('change', e => {
+    const files = Array.from(e.target.files || []);
+    if (files.length) loadFile(files);
+  });
+  document.getElementById('btn-fit').addEventListener('click', fitToModel);
+  document.getElementById('btn-reset').addEventListener('click', resetCamera);
+
+  // --- Экспорт STL ---
+  // Собираем всю modelGroup, STLExporter обходит иерархию сам.
+  // Экспорт в binary — компактнее (~1/6 от ASCII) и работает быстрее.
+  document.getElementById('btn-export-stl').addEventListener('click', () => {
+    if (modelGroup.children.length === 0) {
+      statusEl.textContent = t('export_no_model');
+      return;
+    }
+    if (typeof THREE.STLExporter === 'undefined') {
+      statusEl.textContent = t('err_prefix') + 'STLExporter not loaded';
+      return;
+    }
+    try {
+      modelGroup.updateMatrixWorld(true);
+      const exporter = new THREE.STLExporter();
+      const result = exporter.parse(modelGroup, { binary: true });
+      // result — DataView (binary) или string (ASCII).
+      const blob = result instanceof DataView
+        ? new Blob([result.buffer], { type: 'application/octet-stream' })
+        : new Blob([result], { type: 'text/plain' });
+      // Имя файла: берём базовое имя последней загруженной модели, если есть, иначе "model"
+      const baseName = parts.length > 1 ? 'assembly' : (lastLoadedFileName || 'model').replace(/\.[^.]+$/, '');
+      const filename = baseName + '.stl';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      statusEl.textContent = t('export_done', { name: filename });
+    } catch (err) {
+      statusEl.textContent = t('err_prefix') + err.message;
+    }
+  });
+
+  // --- Drag & drop ---
+  function handleDragOver(e) {
+    e.preventDefault(); e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  }
+  function handleDrop(e) {
+    e.preventDefault(); e.stopPropagation();
+    container.style.outline = '';
+    if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+    const files = Array.from(e.dataTransfer.files);
+    // Проверяем, что хотя бы один файл — известного формата
+    const mainRe = /\.(step|stp|stl|obj|fbx|glb|gltf|3mf|ply|pcd|xyz)$/i;
+    if (files.some(f => mainRe.test(f.name))) {
+      appendNext = !!(e.shiftKey || e.ctrlKey);
+      loadFile(files);
+    } else {
+      statusEl.textContent = t('need_step_stl', { name: files[0].name });
+    }
+  }
+  function handleDragEnter(e) {
+    e.preventDefault();
+    container.style.outline = '3px dashed #6a9aef';
+    container.style.outlineOffset = '-12px';
+  }
+  function handleDragLeave(e) {
+    if (e.relatedTarget === null || e.clientX <= 0 || e.clientY <= 0) {
+      container.style.outline = '';
+    }
+  }
+  window.addEventListener('dragenter', handleDragEnter, false);
+  window.addEventListener('dragover',  handleDragOver,  false);
+  window.addEventListener('dragleave', handleDragLeave, false);
+  window.addEventListener('drop',      handleDrop,      false);
+}
+</script>
+</body>
+</html>
